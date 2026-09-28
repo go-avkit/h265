@@ -163,10 +163,9 @@ func (s *SPS) size() {
 		subW, subH = 2, 2
 	case s.ChromaFormat == 2: // 4:2:2, half width only
 		subW, subH = 2, 1
-	default: // monochrome, 4:4:4, and separate planes: one sample each way
-		subW, subH = 1, 1
-	}
-	if s.SeparatePlanes {
+	default: // monochrome and 4:4:4: one sample each way
+		// Separate colour planes need no case of their own: the flag only exists
+		// when the format is 4:4:4, which lands here already.
 		subW, subH = 1, 1
 	}
 	s.Width = s.CodedWidth - subW*(s.WinLeft+s.WinRight)
