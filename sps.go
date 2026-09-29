@@ -212,6 +212,24 @@ func (s *sticky) skip(n int) {
 	}
 }
 
+// se reads a signed Exp-Golomb integer.
+func (s *sticky) se() int32 {
+	if s.err != nil {
+		return 0
+	}
+	v, err := s.r.SE()
+	s.err = err
+	return v
+}
+
+// moreData says whether any syntax element remains before the bits that end a
+// payload.
+//
+// It carries no guard for a reader that has already failed: the one caller checks
+// that first, because a leftover-bits complaint about a payload that ran out would
+// name the wrong fault. A guard here would be a branch no input can reach.
+func (s *sticky) moreData() bool { return s.r.MoreData() }
+
 func (s *sticky) ue() uint32 {
 	if s.err != nil {
 		return 0

@@ -37,6 +37,24 @@ func (w *writer) zeros(n int) {
 	}
 }
 
+// flag writes one bit from a bool.
+func (w *writer) flag(v bool) {
+	if v {
+		w.bit(1)
+		return
+	}
+	w.bit(0)
+}
+
+// se writes a signed Exp-Golomb code.
+func (w *writer) se(v int32) {
+	if v > 0 {
+		w.ue(uint32(v)*2 - 1)
+		return
+	}
+	w.ue(uint32(-v) * 2)
+}
+
 // ue writes an unsigned Exp-Golomb code.
 func (w *writer) ue(v uint32) {
 	v++
