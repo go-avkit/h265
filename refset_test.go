@@ -130,7 +130,7 @@ func TestBothHalvesComeBackOrderedNearestFirst(t *testing.T) {
 
 // ⛔ The fields between the order-count width and the sets are CONDITIONAL and
 // of variable length. If any of them is walked wrongly the sets are read from
-// the wrong bits, and nothing in them would show it -- so each shape is parsed
+// the wrong bitbuf, and nothing in them would show it -- so each shape is parsed
 // and the set read back out of it.
 func TestTheSetsAreFoundPastEveryConditionalField(t *testing.T) {
 	for _, c := range []struct {
@@ -151,7 +151,7 @@ func TestTheSetsAreFoundPastEveryConditionalField(t *testing.T) {
 				t.Fatalf("ParseSPS: %v", err)
 			}
 			if len(sps.ShortTermRefPicSets) != 1 {
-				t.Fatalf("read %d sets, want one: the walk landed on the wrong bits",
+				t.Fatalf("read %d sets, want one: the walk landed on the wrong bitbuf",
 					len(sps.ShortTermRefPicSets))
 			}
 			rps := sps.ShortTermRefPicSets[0]
@@ -168,7 +168,7 @@ func TestTheSetsAreFoundPastEveryConditionalField(t *testing.T) {
 	}
 }
 
-// A sequence that offers long-term pictures names them by the low bits of their
+// A sequence that offers long-term pictures names them by the low bitbuf of their
 // order count, which is what a slice header picks from.
 func TestLongTermPicturesAreNamedByTheirLowBits(t *testing.T) {
 	u := set{subLayers: 1, chroma: 1, width: 320, height: 240,
@@ -193,14 +193,14 @@ func TestLongTermPicturesAreNamedByTheirLowBits(t *testing.T) {
 // builder that could write a set of two hundred pictures, or a gap of a
 // million, would be a builder for streams that do not exist.
 
-// bits writes fields in a straight line, for buffers these tests hand to the
+// bitbuf writes fields in a straight line, for buffers these tests hand to the
 // readers directly.
-type bits struct {
+type bitbuf struct {
 	b []byte
 	n uint8
 }
 
-func (w *bits) bit(v uint32) {
+func (w *bitbuf) bit(v uint32) {
 	if w.n == 0 {
 		w.b = append(w.b, 0)
 		w.n = 8
@@ -211,7 +211,15 @@ func (w *bits) bit(v uint32) {
 	}
 }
 
-func (w *bits) ue(v uint32) {
+// bits writes a value of a fixed width, which the slice header needs for the
+// order count and the set indices.
+func (w *bitbuf) bits(v uint32, n int) {
+	for i := n - 1; i >= 0; i-- {
+		w.bit(v >> uint(i))
+	}
+}
+
+func (w *bitbuf) ue(v uint32) {
 	v++
 	n := 0
 	for x := v; x > 1; x >>= 1 {
@@ -228,27 +236,27 @@ func (w *bits) ue(v uint32) {
 func TestAStatedSetRefusesWhatCannotBeOne(t *testing.T) {
 	for _, c := range []struct {
 		name  string
-		write func(*bits)
+		write func(*bitbuf)
 	}{
-		{"more pictures before than a set may hold", func(w *bits) { w.ue(64); w.ue(0) }},
-		{"more pictures after than a set may hold", func(w *bits) { w.ue(0); w.ue(64) }},
-		{"a gap past the largest the format states", func(w *bits) {
+		{"more pictures before than a set may hold", func(w *bitbuf) { w.ue(64); w.ue(0) }},
+		{"more pictures after than a set may hold", func(w *bitbuf) { w.ue(0); w.ue(64) }},
+		{"a gap past the largest the format states", func(w *bitbuf) {
 			w.ue(1)
 			w.ue(0)
 			w.ue(40000) // delta_poc_s0_minus1, so a gap of 40001
 			w.bit(1)
 		}},
-		{"a gap past the largest, on the other side", func(w *bits) {
+		{"a gap past the largest, on the other side", func(w *bitbuf) {
 			w.ue(0)
 			w.ue(1)
 			w.ue(40000)
 			w.bit(1)
 		}},
-		{"it ends inside the counts", func(w *bits) { w.ue(3) }},
-		{"it ends inside the entries", func(w *bits) { w.ue(2); w.ue(0); w.ue(0); w.bit(1) }},
+		{"it ends inside the counts", func(w *bitbuf) { w.ue(3) }},
+		{"it ends inside the entries", func(w *bitbuf) { w.ue(2); w.ue(0); w.ue(0); w.bit(1) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var w bits
+			var w bitbuf
 			c.write(&w)
 			if _, err := parseShortTermRPSExplicit(newSticky(w.b)); err == nil {
 				t.Error("accepted")
@@ -261,18 +269,18 @@ func TestAPredictedSetRefusesWhatCannotBeOne(t *testing.T) {
 	prior := []ShortTermRPS{{Before: []RefPic{{-1, true}}}}
 	for _, c := range []struct {
 		name  string
-		write func(*bits)
+		write func(*bitbuf)
 	}{
-		{"a difference past the largest the format states", func(w *bits) {
+		{"a difference past the largest the format states", func(w *bitbuf) {
 			w.bit(1)    // inter_ref_pic_set_prediction_flag
 			w.bit(0)    // delta_rps_sign
 			w.ue(40000) // abs_delta_rps_minus1
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var w bits
+			var w bitbuf
 			c.write(&w)
-			if _, err := parseShortTermRPS(newSticky(w.b), 1, prior); err == nil {
+			if _, err := parseShortTermRPS(newSticky(w.b), 1, prior, false); err == nil {
 				t.Error("accepted")
 			}
 		})
@@ -282,7 +290,7 @@ func TestAPredictedSetRefusesWhatCannotBeOne(t *testing.T) {
 // A buffer that stops inside the flags.
 //
 // ⛔ The first try at this wrote one flag where three were wanted and was
-// ACCEPTED: the last byte still held seven bits of padding, which the reader
+// ACCEPTED: the last byte still held seven bitbuf of padding, which the reader
 // consumed as zeros. Running out needs a set whose flags outlast the bytes, so
 // the referenced set is made large enough that they do.
 func TestAPredictedSetEndingInsideItsFlagsIsRefused(t *testing.T) {
@@ -290,7 +298,7 @@ func TestAPredictedSetEndingInsideItsFlagsIsRefused(t *testing.T) {
 	for i := int32(1); i <= 16; i++ {
 		from.Before = append(from.Before, RefPic{-i, true})
 	}
-	var w bits
+	var w bitbuf
 	w.bit(1) // predicted
 	w.bit(0) // delta_rps_sign
 	w.ue(0)  // abs_delta_rps_minus1
@@ -299,7 +307,7 @@ func TestAPredictedSetEndingInsideItsFlagsIsRefused(t *testing.T) {
 	w.bit(0)
 	w.bit(0)
 	w.bit(0)
-	if _, err := parseShortTermRPS(newSticky(w.b), 1, []ShortTermRPS{from}); err == nil {
+	if _, err := parseShortTermRPS(newSticky(w.b), 1, []ShortTermRPS{from}, false); err == nil {
 		t.Error("a set whose flags ran past the bytes was accepted")
 	}
 }
@@ -311,7 +319,7 @@ func TestAPredictedSetRefusesGrowingPastTheLimit(t *testing.T) {
 	for i := int32(1); i <= 16; i++ {
 		from.Before = append(from.Before, RefPic{-i, true})
 	}
-	var w bits
+	var w bitbuf
 	w.bit(1) // predicted
 	w.bit(1) // delta_rps_sign: negative
 	w.ue(0)  // abs_delta_rps_minus1, so -1: every entry stays before, and the
@@ -319,13 +327,13 @@ func TestAPredictedSetRefusesGrowingPastTheLimit(t *testing.T) {
 	for range from.Count() + 1 {
 		w.bit(1)
 	}
-	if _, err := parseShortTermRPS(newSticky(w.b), 1, []ShortTermRPS{from}); err == nil {
+	if _, err := parseShortTermRPS(newSticky(w.b), 1, []ShortTermRPS{from}, false); err == nil {
 		t.Error("a set of seventeen pictures before was accepted")
 	}
 }
 
 func TestASequenceRefusesTooManySets(t *testing.T) {
-	var w bits
+	var w bitbuf
 	w.ue(65) // num_short_term_ref_pic_sets
 	s := &SPS{Log2MaxPOCLSB: 8}
 	if err := s.readShortTermRefPicSets(newSticky(w.b)); err == nil {
@@ -336,7 +344,7 @@ func TestASequenceRefusesTooManySets(t *testing.T) {
 		t.Error("a missing count was accepted")
 	}
 	// And a set that is itself bad is reported, not swallowed.
-	var w2 bits
+	var w2 bitbuf
 	w2.ue(1)
 	w2.ue(64)
 	w2.ue(0)
@@ -349,7 +357,7 @@ func TestASequenceRefusesTooManySets(t *testing.T) {
 func TestLongTermPicturesStopAtWhatIsThere(t *testing.T) {
 	// A count past what a sequence may offer leaves the list empty rather than
 	// allocating for it.
-	var w bits
+	var w bitbuf
 	w.bit(1)  // long_term_ref_pics_present_flag
 	w.ue(100) // num_long_term_ref_pics_sps
 	s := &SPS{Log2MaxPOCLSB: 8}
@@ -358,7 +366,7 @@ func TestLongTermPicturesStopAtWhatIsThere(t *testing.T) {
 		t.Errorf("read %d long-term pictures from a count of a hundred", len(s.LongTermRefPics))
 	}
 	// A sequence that offers none says so in one bit.
-	var w2 bits
+	var w2 bitbuf
 	w2.bit(0)
 	s2 := &SPS{Log2MaxPOCLSB: 8}
 	s2.readLongTermRefPics(newSticky(w2.b))
@@ -374,7 +382,7 @@ func TestEntriesCrossZeroBetweenTheHalves(t *testing.T) {
 	// predicted writes a predicted set: a sign, a magnitude, and every entry
 	// kept.
 	predicted := func(negative bool, abs uint32, n int) []byte {
-		var w bits
+		var w bitbuf
 		w.bit(1) // inter_ref_pic_set_prediction_flag
 		if negative {
 			w.bit(1)
@@ -390,7 +398,7 @@ func TestEntriesCrossZeroBetweenTheHalves(t *testing.T) {
 	from := ShortTermRPS{Before: []RefPic{{-1, true}}, After: []RefPic{{1, true}}}
 
 	t.Run("a picture already seen becomes one still to come", func(t *testing.T) {
-		got, err := parseShortTermRPS(newSticky(predicted(false, 3, from.Count())), 1, []ShortTermRPS{from})
+		got, err := parseShortTermRPS(newSticky(predicted(false, 3, from.Count())), 1, []ShortTermRPS{from}, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -404,7 +412,7 @@ func TestEntriesCrossZeroBetweenTheHalves(t *testing.T) {
 	})
 
 	t.Run("a picture still to come becomes one already seen", func(t *testing.T) {
-		got, err := parseShortTermRPS(newSticky(predicted(true, 3, from.Count())), 1, []ShortTermRPS{from})
+		got, err := parseShortTermRPS(newSticky(predicted(true, 3, from.Count())), 1, []ShortTermRPS{from}, false)
 		if err != nil {
 			t.Fatal(err)
 		}

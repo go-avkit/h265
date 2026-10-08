@@ -28,6 +28,7 @@ picture boundaries, or hand slices to something that does decode.
 | `SplitPictures`, `Picture` | coded pictures, from `first_slice_segment_in_pic_flag` |
 | `POCCounter`, `POC` | picture order counts, clause 8.3.1 |
 | `ShortTermRPS`, `RefPic`, `LongTermRefPic` | the reference picture sets a sequence carries |
+| `ReferencesOf`, `PictureRefs`, `LongTermRef` | what one coded picture says it still needs |
 | `ShortHeaderError` | a unit that ended inside the syntax, said as such |
 
 ⛔ **HEVC's slice types are not H.264's.** Here `B` is 0, `P` is 1 and `I` is 2 —
@@ -80,8 +81,22 @@ shape has a test that reads a known set back out of it.
 The scaling lists are skipped with the reader the picture parameter set already
 had: a second copy of that walk would be a second thing to drift.
 
-A slice header may also state a set of its own, with its own way of saying which
-earlier set it differs from. That is not here yet.
+`ReferencesOf` reads what one picture states. A slice usually **names** one of
+the sequence's sets rather than restating it — which is why a sequence carries
+them — and may instead state one of its own, itself possibly a difference from
+one of the sequence's.
+
+⛔ The index into those sets is **as wide as the number of them needs, and one
+set means no index at all**. A reader that always read bits would take the next
+field as the index and misread everything after it.
+
+Long-term pictures come from two places at once and are counted as one run: some
+named out of the sequence's list, some stated by the slice. Each is named by the
+LOW bits of its order count, and states the high bits only when the low ones
+would be ambiguous.
+
+An IDR says nothing, and that is not an error: it begins a coded video sequence,
+so nothing before it is available and nothing after it may reach back.
 
 A picture may be carried by several slice segments, and only the one with
 `first_slice_segment_in_pic_flag` set begins a new picture. That is what

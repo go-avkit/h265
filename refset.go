@@ -50,25 +50,31 @@ const maxShortTermRPS = 64
 // one rather than listed outright, and the difference cannot be applied -- nor
 // even its bits counted -- without the set it is a difference from.
 //
-// A slice header may also state a set of its own, and there the predicted form
-// says how far back to look rather than always meaning the set before. That is
-// not here: nothing reads a slice header's own set yet, and a parameter carried
-// for a caller that does not exist is a branch no test can reach.
-func parseShortTermRPS(r *sticky, idx int, prior []ShortTermRPS) (ShortTermRPS, error) {
+// inSliceHeader changes two things. A slice's own set always states whether it
+// is predicted, where the first set of a sequence cannot be; and it says how
+// far back to look rather than always meaning the set before, because it comes
+// after every set the sequence carries rather than among them.
+func parseShortTermRPS(r *sticky, idx int, prior []ShortTermRPS, inSliceHeader bool) (ShortTermRPS, error) {
 	var out ShortTermRPS
 	predict := false
-	if idx != 0 {
+	if idx != 0 || inSliceHeader {
 		predict = r.flag()
 	}
 	if !predict {
 		return parseShortTermRPSExplicit(r)
 	}
 
-	// Which earlier set this one is a difference from: in a sequence parameter
-	// set, always the one before. No bound check: the only caller appends
-	// exactly one set per turn and passes the slice it has built, so prior
-	// holds idx sets and idx is at least one here -- predict is false at zero.
-	from := prior[idx-1]
+	// Which earlier set this one is a difference from. In a sequence parameter
+	// set it is always the one before; a slice header counts back from the end
+	// of what the sequence carries.
+	ref := idx - 1
+	if inSliceHeader {
+		ref = len(prior) - (int(r.ue()) + 1)
+	}
+	if ref < 0 || ref >= len(prior) {
+		return out, fmt.Errorf("%w: a set predicted from %d, which is not there", ErrSliceHeader, ref)
+	}
+	from := prior[ref]
 
 	sign := int32(1)
 	if r.flag() { // delta_rps_sign

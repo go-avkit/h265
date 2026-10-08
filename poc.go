@@ -125,11 +125,19 @@ func carriesPOC(u Unit) bool {
 }
 
 // pocLSB reads slice_pic_order_cnt_lsb out of a first slice segment.
+func pocLSB(u Unit, sps SPS, pps PPS) (uint32, error) {
+	_, lsb, err := walkToPOC(u, sps, pps)
+	return lsb, err
+}
+
+// walkToPOC reads a first slice segment's header as far as its order count and
+// hands back the reader where it stopped, so what follows -- the reference
+// picture sets -- can be read without walking the same fields twice.
 //
 // It walks the header rather than calling ParseSliceSegmentHeader because the
-// field sits past slice_type and its width comes from the SEQUENCE parameter
-// set, which that function does not take.
-func pocLSB(u Unit, sps SPS, pps PPS) (uint32, error) {
+// order count sits past slice_type and its width comes from the SEQUENCE
+// parameter set, which that function does not take.
+func walkToPOC(u Unit, sps SPS, pps PPS) (*sticky, uint32, error) {
 	r := newSticky(u.Unescape())
 	first := r.flag()
 	if u.Type.IsRandomAccess() {
@@ -141,7 +149,7 @@ func pocLSB(u Unit, sps SPS, pps PPS) (uint32, error) {
 		// one that is not the first needs its address, whose width this package
 		// does not work out. Either way the count belongs to the picture, and
 		// the picture's first segment has it.
-		return 0, fmt.Errorf("%w: not the first segment of its picture", ErrNoOrder)
+		return nil, 0, fmt.Errorf("%w: not the first segment of its picture", ErrNoOrder)
 	}
 	for i := uint8(0); i < pps.ExtraSliceHeaderBits; i++ {
 		r.bit()
@@ -153,9 +161,12 @@ func pocLSB(u Unit, sps SPS, pps PPS) (uint32, error) {
 	if sps.SeparatePlanes {
 		r.bits(2) // colour_plane_id
 	}
+	// No IDR case here: an IDR carries no order count at all, and both callers
+	// answer for one before reaching this -- POCCounter.Next with a count of
+	// zero, ReferencesOf with an empty set.
 	lsb := r.bits(int(sps.Log2MaxPOCLSB))
 	if r.err != nil {
-		return 0, r.err
+		return nil, 0, r.err
 	}
-	return lsb, nil
+	return r, lsb, nil
 }
