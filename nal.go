@@ -26,7 +26,17 @@ type UnitType uint8
 const (
 	UnitTrailN    UnitType = 0
 	UnitTrailR    UnitType = 1
+	UnitTSAN      UnitType = 2
+	UnitTSAR      UnitType = 3
+	UnitSTSAN     UnitType = 4
+	UnitSTSAR     UnitType = 5
+	UnitRADLN     UnitType = 6
+	UnitRADLR     UnitType = 7
+	UnitRASLN     UnitType = 8
+	UnitRASLR     UnitType = 9
 	UnitBLAWLP    UnitType = 16
+	UnitBLAWRADL  UnitType = 17
+	UnitBLANLP    UnitType = 18
 	UnitIDRWRADL  UnitType = 19
 	UnitIDRNLP    UnitType = 20
 	UnitCRA       UnitType = 21
@@ -61,6 +71,31 @@ type Unit struct {
 	// can be thinned by dropping the higher ones, which is what it is for.
 	TemporalID uint8
 	Payload    []byte
+}
+
+// IsIDR says the picture starts a new coded video sequence and states no order
+// of its own: an IDR carries no slice_pic_order_cnt_lsb at all, and its count is
+// zero by definition.
+func (t UnitType) IsIDR() bool { return t == UnitIDRWRADL || t == UnitIDRNLP }
+
+// IsBLA says the stream was spliced here. A broken link picture is decoded as a
+// random access point whose leading pictures may refer to material that is not
+// there, and its order count restarts: the high bits are taken as zero however
+// far the count had got.
+func (t UnitType) IsBLA() bool {
+	return t == UnitBLAWLP || t == UnitBLAWRADL || t == UnitBLANLP
+}
+
+// IsLeading says the picture precedes its random access point in output order
+// while following it in decode order -- RADL if it can be decoded, RASL if it
+// refers to material before the access point and so may not be.
+func (t UnitType) IsLeading() bool { return t >= UnitRADLN && t <= UnitRASLR }
+
+// IsSubLayerNonReference says no picture of the same sub-layer uses this one for
+// prediction, which is what makes a stream thinnable: these can be dropped
+// without disturbing anything left. The even types below 15 are the ones.
+func (t UnitType) IsSubLayerNonReference() bool {
+	return t < 15 && t%2 == 0
 }
 
 // SplitAnnexB finds the NAL units of a byte stream and reads each one's header.
