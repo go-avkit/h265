@@ -53,6 +53,10 @@ type SPS struct {
 	// LongTermRefPics are the long-term pictures the sequence offers, named by
 	// the low bits of their order count.
 	LongTermRefPics []LongTermRefPic
+	// LongTermRefPicsPresent says the sequence allows long-term pictures at
+	// all. It is not the same as offering any: a sequence may allow them and
+	// list none, and then a slice states its own.
+	LongTermRefPicsPresent bool
 }
 
 // LongTermRefPic is one long-term picture a sequence offers to its slices.
@@ -192,7 +196,7 @@ func (s *SPS) readShortTermRefPicSets(r *sticky) error {
 	for i := uint32(0); i < n; i++ {
 		// Each set may be stated as a difference from the one before, so they
 		// are read in order and every one is kept.
-		set, err := parseShortTermRPS(r, int(i), s.ShortTermRefPicSets)
+		set, err := parseShortTermRPS(r, int(i), s.ShortTermRefPicSets, false)
 		if err != nil {
 			return err
 		}
@@ -208,6 +212,7 @@ func (s *SPS) readLongTermRefPics(r *sticky) {
 	if !r.flag() { // long_term_ref_pics_present_flag
 		return
 	}
+	s.LongTermRefPicsPresent = true
 	n := r.ue()
 	if r.err != nil || n > maxRefPics*2 {
 		return
