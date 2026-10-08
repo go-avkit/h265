@@ -46,6 +46,19 @@ type SPS struct {
 	BitDepthLuma   uint8
 	BitDepthChroma uint8
 	Log2MaxPOCLSB  uint8
+	// ShortTermRefPicSets are the sets a slice may name instead of stating one
+	// of its own, in the order the sequence lists them. A set may be written as
+	// a difference from an earlier one, so the order is load-bearing.
+	ShortTermRefPicSets []ShortTermRPS
+	// LongTermRefPics are the long-term pictures the sequence offers, named by
+	// the low bits of their order count.
+	LongTermRefPics []LongTermRefPic
+}
+
+// LongTermRefPic is one long-term picture a sequence offers to its slices.
+type LongTermRefPic struct {
+	POCLSB uint32
+	Used   bool
 }
 
 // generalPTLBits is how many bits the general profile, tier and level spend.
@@ -99,6 +112,36 @@ func ParseSPS(u Unit) (SPS, error) {
 	s.BitDepthLuma = uint8(r.ue()) + 8
 	s.BitDepthChroma = uint8(r.ue()) + 8
 	s.Log2MaxPOCLSB = uint8(r.ue()) + 4
+	if s.Log2MaxPOCLSB > 16 {
+		// 7.4.3.2.1 bounds log2_max_pic_order_cnt_lsb_minus4 at 12.
+		return s, fmt.Errorf("%w: log2 max poc lsb of %d", ErrUnsupportedSPS, s.Log2MaxPOCLSB)
+	}
+
+	s.skipSubLayerOrdering(r)
+	s.skipCodingBlockSizes(r)
+	if r.flag() { // scaling_list_enabled_flag
+		if r.flag() { // sps_scaling_list_data_present_flag
+			// The same structure the picture parameter set carries, and the
+			// same reader: a second copy would be a second thing to drift.
+			skipScalingListData(r)
+		}
+	}
+	r.bit()       // amp_enabled_flag
+	r.bit()       // sample_adaptive_offset_enabled_flag
+	if r.flag() { // pcm_enabled_flag
+		r.bits(4) // pcm_sample_bit_depth_luma_minus1
+		r.bits(4) // pcm_sample_bit_depth_chroma_minus1
+		r.ue()    // log2_min_pcm_luma_coding_block_size_minus3
+		r.ue()    // log2_diff_max_min_pcm_luma_coding_block_size
+		r.bit()   // pcm_loop_filter_disabled_flag
+	}
+	if r.err != nil {
+		return s, r.err
+	}
+	if err := s.readShortTermRefPicSets(r); err != nil {
+		return s, err
+	}
+	s.readLongTermRefPics(r)
 
 	if r.err != nil {
 		return s, r.err
@@ -108,6 +151,71 @@ func ParseSPS(u Unit) (SPS, error) {
 	}
 	s.size()
 	return s, nil
+}
+
+// skipSubLayerOrdering consumes what each sub-layer states about its decoded
+// picture buffer. None of it is kept: this package reads syntax, and a buffer
+// size describes a decoder rather than the stream.
+func (s *SPS) skipSubLayerOrdering(r *sticky) {
+	start := 0
+	if !r.flag() { // sps_sub_layer_ordering_info_present_flag
+		// One set of values stands for every sub-layer.
+		start = int(s.MaxSubLayers) - 1
+	}
+	for i := start; i < int(s.MaxSubLayers); i++ {
+		r.ue() // sps_max_dec_pic_buffering_minus1
+		r.ue() // sps_max_num_reorder_pics
+		r.ue() // sps_max_latency_increase_plus1
+	}
+}
+
+// skipCodingBlockSizes consumes the coding and transform block geometry and the
+// transform hierarchy depths.
+func (s *SPS) skipCodingBlockSizes(r *sticky) {
+	r.ue() // log2_min_luma_coding_block_size_minus3
+	r.ue() // log2_diff_max_min_luma_coding_block_size
+	r.ue() // log2_min_luma_transform_block_size_minus2
+	r.ue() // log2_diff_max_min_luma_transform_block_size
+	r.ue() // max_transform_hierarchy_depth_inter
+	r.ue() // max_transform_hierarchy_depth_intra
+}
+
+// readShortTermRefPicSets reads every set the sequence carries.
+func (s *SPS) readShortTermRefPicSets(r *sticky) error {
+	n := r.ue()
+	if r.err != nil {
+		return r.err
+	}
+	if n > maxShortTermRPS {
+		return fmt.Errorf("%w: %d short-term reference picture sets", ErrUnsupportedSPS, n)
+	}
+	for i := uint32(0); i < n; i++ {
+		// Each set may be stated as a difference from the one before, so they
+		// are read in order and every one is kept.
+		set, err := parseShortTermRPS(r, int(i), s.ShortTermRefPicSets)
+		if err != nil {
+			return err
+		}
+		s.ShortTermRefPicSets = append(s.ShortTermRefPicSets, set)
+	}
+	return nil
+}
+
+// readLongTermRefPics reads the long-term pictures a sequence offers. They are
+// named by the low bits of their order count, which is all a slice header needs
+// to pick one.
+func (s *SPS) readLongTermRefPics(r *sticky) {
+	if !r.flag() { // long_term_ref_pics_present_flag
+		return
+	}
+	n := r.ue()
+	if r.err != nil || n > maxRefPics*2 {
+		return
+	}
+	for i := uint32(0); i < n; i++ {
+		lsb := r.bits(int(s.Log2MaxPOCLSB))
+		s.LongTermRefPics = append(s.LongTermRefPics, LongTermRefPic{POCLSB: lsb, Used: r.flag()})
+	}
 }
 
 // skipSubLayerPTL consumes what the sub-layers state about profile and level.

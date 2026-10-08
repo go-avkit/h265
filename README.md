@@ -27,6 +27,7 @@ picture boundaries, or hand slices to something that does decode.
 | `ParseSliceSegmentHeader`, `SliceSegmentHeader`, `SliceType` | the slice segment header |
 | `SplitPictures`, `Picture` | coded pictures, from `first_slice_segment_in_pic_flag` |
 | `POCCounter`, `POC` | picture order counts, clause 8.3.1 |
+| `ShortTermRPS`, `RefPic`, `LongTermRefPic` | the reference picture sets a sequence carries |
 | `ShortHeaderError` | a unit that ended inside the syntax, said as such |
 
 ⛔ **HEVC's slice types are not H.264's.** Here `B` is 0, `P` is 1 and `I` is 2 —
@@ -55,6 +56,32 @@ The derivation is held against a second implementation: FFmpeg's
 there, and 84 of 1024 negative cases disagree. 8.3.1 keeps the low and high parts
 apart and the low part is what the slice header stated, so that is what this
 keeps.
+
+### The pictures a picture may still need
+
+A sequence parameter set carries the short-term reference picture sets its
+slices may name. `SPS.ShortTermRefPicSets` holds them in order, each as the
+pictures already seen (`Before`) and those still to come (`After`), nearest
+first.
+
+⛔ **A set may be written as a DIFFERENCE from an earlier one**, and the
+difference cannot even have its bits counted without the set it is a difference
+from — so the sets are read in order and every one is kept. The smallest
+difference the syntax can state is one: `abs_delta_rps_minus1` has no way to
+say "the same set", so a predicted set always moves every entry, and an entry
+that crosses zero changes which half it belongs to.
+
+⛔ **Everything between the order-count width and the sets is conditional and of
+variable length** — sub-layer buffering, block and transform geometry, the
+scaling lists, the PCM fields. A reader that walked any of them wrongly would
+read the sets from the wrong bits, and nothing in a set would show it. Each
+shape has a test that reads a known set back out of it.
+
+The scaling lists are skipped with the reader the picture parameter set already
+had: a second copy of that walk would be a second thing to drift.
+
+A slice header may also state a set of its own, with its own way of saying which
+earlier set it differs from. That is not here yet.
 
 A picture may be carried by several slice segments, and only the one with
 `first_slice_segment_in_pic_flag` set begins a new picture. That is what
