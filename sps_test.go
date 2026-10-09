@@ -101,6 +101,12 @@ type set struct {
 	pocLSBMinus4 uint32
 	// badSetCount writes a number of sets past what a sequence may carry.
 	badSetCount bool
+	// sao and temporalMVP write the two flags a SLICE HEADER cannot be read
+	// without. ⛔ They were absent from this writer while the parser read one
+	// of them: the read landed on the trailing stop bit and the field came out
+	// true by accident, with nothing asserting it.
+	sao         bool
+	temporalMVP bool
 }
 
 // refGap is one entry of a set a test writes: the gap from the previous entry,
@@ -189,7 +195,7 @@ func (s set) buildTail(w *writer) {
 		w.bit(0)
 	}
 	w.bit(0) // amp_enabled_flag
-	w.bit(0) // sample_adaptive_offset_enabled_flag
+	w.flag(s.sao)
 	if s.pcm {
 		w.bit(1)
 		w.bits(7, 4) // pcm_sample_bit_depth_luma_minus1
@@ -244,6 +250,27 @@ func (s set) buildTail(w *writer) {
 		}
 	} else {
 		w.bit(0)
+	}
+	w.flag(s.temporalMVP)
+}
+
+// TestTheTwoFlagsASliceHeaderNeeds: neither is used to describe a stream, and
+// both decide whether a field of the slice header is present. A reader that
+// guessed either is misaligned from that point on.
+func TestTheTwoFlagsASliceHeaderNeeds(t *testing.T) {
+	for _, c := range []struct{ sao, mvp bool }{
+		{false, false}, {true, false}, {false, true}, {true, true},
+	} {
+		u := set{subLayers: 1, chroma: 1, width: 64, height: 64,
+			sao: c.sao, temporalMVP: c.mvp}.build()
+		sps, err := ParseSPS(u)
+		if err != nil {
+			t.Fatalf("sao=%v mvp=%v: %v", c.sao, c.mvp, err)
+		}
+		if sps.SAOEnabled != c.sao || sps.TemporalMVPEnabled != c.mvp {
+			t.Errorf("wrote sao=%v mvp=%v, read sao=%v mvp=%v",
+				c.sao, c.mvp, sps.SAOEnabled, sps.TemporalMVPEnabled)
+		}
 	}
 }
 

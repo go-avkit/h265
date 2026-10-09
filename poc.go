@@ -126,7 +126,7 @@ func carriesPOC(u Unit) bool {
 
 // pocLSB reads slice_pic_order_cnt_lsb out of a first slice segment.
 func pocLSB(u Unit, sps SPS, pps PPS) (uint32, error) {
-	_, lsb, err := walkToPOC(u, sps, pps)
+	_, lsb, _, err := walkToPOC(u, sps, pps)
 	return lsb, err
 }
 
@@ -137,7 +137,7 @@ func pocLSB(u Unit, sps SPS, pps PPS) (uint32, error) {
 // It walks the header rather than calling ParseSliceSegmentHeader because the
 // order count sits past slice_type and its width comes from the SEQUENCE
 // parameter set, which that function does not take.
-func walkToPOC(u Unit, sps SPS, pps PPS) (*sticky, uint32, error) {
+func walkToPOC(u Unit, sps SPS, pps PPS) (*sticky, uint32, SliceType, error) {
 	r := newSticky(u.Unescape())
 	first := r.flag()
 	if u.Type.IsRandomAccess() {
@@ -149,12 +149,12 @@ func walkToPOC(u Unit, sps SPS, pps PPS) (*sticky, uint32, error) {
 		// one that is not the first needs its address, whose width this package
 		// does not work out. Either way the count belongs to the picture, and
 		// the picture's first segment has it.
-		return nil, 0, fmt.Errorf("%w: not the first segment of its picture", ErrNoOrder)
+		return nil, 0, 0, fmt.Errorf("%w: not the first segment of its picture", ErrNoOrder)
 	}
 	for i := uint8(0); i < pps.ExtraSliceHeaderBits; i++ {
 		r.bit()
 	}
-	r.ue() // slice_type
+	sliceType := SliceType(r.ue())
 	if pps.OutputFlagPresent {
 		r.bit() // pic_output_flag
 	}
@@ -166,7 +166,13 @@ func walkToPOC(u Unit, sps SPS, pps PPS) (*sticky, uint32, error) {
 	// zero, ReferencesOf with an empty set.
 	lsb := r.bits(int(sps.Log2MaxPOCLSB))
 	if r.err != nil {
-		return nil, 0, r.err
+		return nil, 0, 0, r.err
 	}
-	return r, lsb, nil
+	// ⛔ 7.4.7.1 names only three values. A fourth would make every test on the
+	// type below answer "not P, not B", which reads as an I slice rather than
+	// as the malformed header it is.
+	if sliceType > SliceI {
+		return nil, 0, 0, fmt.Errorf("%w: slice type %d", ErrSliceHeader, uint32(sliceType))
+	}
+	return r, lsb, sliceType, nil
 }

@@ -12,24 +12,30 @@ import (
 // ExampleLists is the snippet the README shows, compiled. A documented call
 // that does not build is a claim, not a capability.
 func ExampleLists() {
-	var (
-		sps  h265.SPS
-		pps  = h265.PPS{NumRefIdxL0: 3, NumRefIdxL1: 2}
-		hdr  = h265.SliceSegmentHeader{Type: h265.SliceB}
-		refs = h265.PictureRefs{
-			ShortTerm: h265.ShortTermRPS{
-				Before: []h265.RefPic{{DeltaPOC: -8, Used: true}, {DeltaPOC: -4, Used: true}},
-				After:  []h265.RefPic{{DeltaPOC: 4, Used: true}},
-			},
-		}
-	)
-	set := h265.Derive(refs, 16, sps)
-	l0, l1 := h265.Lists(set, hdr.Type, int(pps.NumRefIdxL0), int(pps.NumRefIdxL1))
+	var sps h265.SPS
+	// What ReferencesOf reads out of the slice segment header. A B slice that
+	// names, for each of its three list 0 entries, the picture it wants there.
+	refs := h265.PictureRefs{
+		Type:              h265.SliceB,
+		NumRefIdxL0Active: 3,
+		NumRefIdxL1Active: 2,
+		ShortTerm: h265.ShortTermRPS{
+			Before: []h265.RefPic{{DeltaPOC: -8, Used: true}, {DeltaPOC: -4, Used: true}},
+			After:  []h265.RefPic{{DeltaPOC: 4, Used: true}},
+		},
+		ListEntryL0: []uint32{2, 0, 1},
+	}
 
+	set := h265.Derive(refs, 16, sps)
+	l0, l1, err := h265.Lists(set, refs)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	fmt.Println("list 0:", order(l0))
 	fmt.Println("list 1:", order(l1))
 	// Output:
-	// list 0: [8 12 20]
+	// list 0: [20 8 12]
 	// list 1: [20 8]
 }
 

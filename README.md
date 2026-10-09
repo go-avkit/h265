@@ -30,7 +30,7 @@ picture boundaries, or hand slices to something that does decode.
 | `ShortTermRPS`, `RefPic`, `LongTermRefPic` | the reference picture sets a sequence carries |
 | `ReferencesOf`, `PictureRefs`, `LongTermRef` | what one coded picture says it still needs |
 | `Derive`, `RefPicSet`, `LtPicture` | the pictures a decoder must keep for it, clause 8.3.2 |
-| `Lists`, `RefListEntry` | the two lists a slice predicts from, clause 8.3.4 |
+| `Lists`, `RefListEntry` | the two lists a slice predicts from, clause 8.3.4, in the order the slice asked for |
 | `ShortHeaderError` | a unit that ended inside the syntax, said as such |
 
 ⛔ **HEVC's slice types are not H.264's.** Here `B` is 0, `P` is 1 and `I` is 2 —
@@ -124,9 +124,13 @@ stating one wrap are 256 and 512 back, not 256 twice.
 8.3.4. They hold the SAME pictures; the order is what distinguishes them.
 
 ```go
+refs, err := h265.ReferencesOf(first, sps, pps)
 set := h265.Derive(refs, poc, sps)
-l0, l1 := h265.Lists(set, hdr.Type, int(pps.NumRefIdxL0), int(pps.NumRefIdxL1))
+l0, l1, err := h265.Lists(set, refs)
 ```
+
+`refs` carries how many entries each list has and, where the slice stated one,
+the order they are taken in -- so the caller passes neither.
 
 ⛔ **The two lists are not interchangeable.** List 0 opens with the pictures
 BEFORE this one in output order, list 1 with those after. A caller that fed a B
@@ -140,11 +144,27 @@ legal, and a list built to stop once would come out short.
 
 An I slice gets no lists. A P slice gets list 0 only.
 
-**Not here: the reorder.** A slice may permute its lists with
-`ref_pic_lists_modification()`, and this package does not yet read that syntax,
-so `Lists` gives the default order. Nor does it read
-`num_ref_idx_active_override`: the counts are the caller's to pass, from the
-picture parameter set or from a slice header it read itself.
+### The order the slice asked for
+
+A slice may state, for each position of each list, which picture goes there --
+`ref_pic_lists_modification()`, 7.3.6.2. `ReferencesOf` reads it into
+`ListEntryL0` and `ListEntryL1`, and `Lists` applies it.
+
+⛔ **An entry indexes the TEMPORARY list, which is as long as the greater of the
+list's own length and the pictures available.** A slice may name a picture
+beyond the end of its own list, and a reader that cut the list to length first
+would refuse a legal stream.
+
+⛔ **nil is not an empty list.** A slice that stated no modification leaves the
+default order standing; a list of no entries is a different thing, and the two
+must not be spelt the same way.
+
+An entry is `Ceil(Log2(NumPicTotalCurr))` bits wide, which holds values past the
+last picture -- three pictures are named in two bits -- so an index out of range
+is reachable from a field of conformant width. `Lists` refuses it.
+
+**Not here:** `pred_weight_table()`, `collocated_ref_idx`, and the fields after
+them. `ReferencesOf` stops once it has the lists.
 
 A picture may be carried by several slice segments, and only the one with
 `first_slice_segment_in_pic_flag` set begins a new picture. That is what
