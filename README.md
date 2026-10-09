@@ -30,6 +30,7 @@ picture boundaries, or hand slices to something that does decode.
 | `ShortTermRPS`, `RefPic`, `LongTermRefPic` | the reference picture sets a sequence carries |
 | `ReferencesOf`, `PictureRefs`, `LongTermRef` | what one coded picture says it still needs |
 | `Derive`, `RefPicSet`, `LtPicture` | the pictures a decoder must keep for it, clause 8.3.2 |
+| `Lists`, `RefListEntry` | the two lists a slice predicts from, clause 8.3.4 |
 | `ShortHeaderError` | a unit that ended inside the syntax, said as such |
 
 ⛔ **HEVC's slice types are not H.264's.** Here `B` is 0, `P` is 1 and `I` is 2 —
@@ -117,6 +118,34 @@ entries — each counted from the one before, not from zero — and the count st
 afresh for the slice's own entries after the sequence's. Two entries each
 stating one wrap are 256 and 512 back, not 256 twice.
 
+### The two lists a slice predicts from
+
+`Lists` builds `RefPicList0` and `RefPicList1` out of a derived set, clause
+8.3.4. They hold the SAME pictures; the order is what distinguishes them.
+
+```go
+set := h265.Derive(refs, poc, sps)
+l0, l1 := h265.Lists(set, hdr.Type, int(pps.NumRefIdxL0), int(pps.NumRefIdxL1))
+```
+
+⛔ **The two lists are not interchangeable.** List 0 opens with the pictures
+BEFORE this one in output order, list 1 with those after. A caller that fed a B
+slice the same list twice, or swapped them, would predict from the wrong side
+and get an image that is wrong without being malformed.
+
+A list is as long as the slice says, which has nothing to do with how many
+pictures are available. **Shorter** and it simply stops. **Longer** and the
+candidates are repeated, from the start, as many times as it takes — that is
+legal, and a list built to stop once would come out short.
+
+An I slice gets no lists. A P slice gets list 0 only.
+
+**Not here: the reorder.** A slice may permute its lists with
+`ref_pic_lists_modification()`, and this package does not yet read that syntax,
+so `Lists` gives the default order. Nor does it read
+`num_ref_idx_active_override`: the counts are the caller's to pass, from the
+picture parameter set or from a slice header it read itself.
+
 A picture may be carried by several slice segments, and only the one with
 `first_slice_segment_in_pic_flag` set begins a new picture. That is what
 `SplitPictures` counts, which is how a stream's pictures are counted without
@@ -125,9 +154,10 @@ decoding any of them.
 ## Sibling
 
 [`go-avkit/h264`](https://github.com/go-avkit/h264) is the same layer for
-H.264/AVC, and goes further: it also carries the derivations of clause 8.2
-(picture order counts, the reference set, the reference lists, the prediction
-weights). HEVC's equivalents are not here yet.
+H.264/AVC. Its clause 8.2 derivations have HEVC counterparts here — order
+counts, the reference set, the reference lists — with two exceptions: h264 also
+reads the prediction weights and applies the list reordering, and this package
+does neither yet.
 
 **Windows, macOS, Linux; six 64-bit architectures.** 100% statement coverage,
 gated in CI.

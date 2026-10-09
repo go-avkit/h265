@@ -15,7 +15,16 @@ var (
 	// ErrUnsupportedPPS means the set does not end where a set must end, so
 	// something in it was read wrongly.
 	ErrUnsupportedPPS = errors.New("h265: picture parameter set was not consumed exactly")
+	// ErrRefIdxRange means the set states more reference indices than a list
+	// can hold. 7.4.3.3 puts num_ref_idx_lX_default_active_minus1 in 0..14; a
+	// larger value is not a big stream, it is a few bytes asking a reader to
+	// size a list from an attacker's number.
+	ErrRefIdxRange = errors.New("h265: num_ref_idx_lX_default_active_minus1 out of range")
 )
+
+// MaxRefIdxActive is the most entries a reference picture list may have,
+// 7.4.3.3. It bounds what a parameter set may state and what Lists will build.
+const MaxRefIdxActive = 15
 
 // PPS is what a picture parameter set says about the slices that refer to it.
 //
@@ -75,8 +84,17 @@ func ParsePPS(u Unit) (PPS, error) {
 	p.ExtraSliceHeaderBits = uint8(r.bits(3))
 	p.SignDataHiding = r.flag()
 	p.CABACInitPresent = r.flag()
-	p.NumRefIdxL0 = r.ue() + 1
-	p.NumRefIdxL1 = r.ue() + 1
+	// ⛔ Read BEFORE the +1 the syntax element carries: at the top of the range
+	// the increment wraps to zero, and a bound applied after it would pass the
+	// one value that most needs refusing.
+	//
+	// ⛔ Checked HERE, not where a list is built: every consumer of this set
+	// inherits the number, and a bound on one of them leaves the rest exposed.
+	l0, l1 := r.ue(), r.ue()
+	if r.err == nil && (l0 >= MaxRefIdxActive || l1 >= MaxRefIdxActive) {
+		return PPS{}, fmt.Errorf("%w: %d and %d", ErrRefIdxRange, l0, l1)
+	}
+	p.NumRefIdxL0, p.NumRefIdxL1 = l0+1, l1+1
 	p.InitQP = r.se() + 26
 	p.ConstrainedIntraPred = r.flag()
 	p.TransformSkip = r.flag()
