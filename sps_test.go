@@ -99,6 +99,10 @@ type set struct {
 	// pocLSBMinus4 overrides log2_max_pic_order_cnt_lsb_minus4, so a test can
 	// state a width the format does not allow.
 	pocLSBMinus4 uint32
+	// bdLuma and bdChroma override the bit depths, as the minus-eight the
+	// syntax carries, so a test can state one the format does not allow.
+	bdLuma   uint32
+	bdChroma uint32
 	// badSetCount writes a number of sets past what a sequence may carry.
 	badSetCount bool
 	// sao and temporalMVP write the two flags a SLICE HEADER cannot be read
@@ -163,8 +167,8 @@ func (s set) build() Unit {
 	} else {
 		w.bit(0)
 	}
-	w.ue(0) // bit_depth_luma_minus8
-	w.ue(0) // bit_depth_chroma_minus8
+	w.ue(s.bdLuma)   // bit_depth_luma_minus8
+	w.ue(s.bdChroma) // bit_depth_chroma_minus8
 	if s.pocLSBMinus4 != 0 {
 		w.ue(s.pocLSBMinus4)
 	} else {
@@ -507,5 +511,67 @@ func TestASequenceEndingInsideItsLongTermPicturesIsRefused(t *testing.T) {
 		if _, err := ParseSPS(short); err == nil {
 			t.Errorf("cut %d bytes short: accepted anyway", cut)
 		}
+	}
+}
+
+// TestAWidthCheckedAfterTheCastThatWraps.
+//
+// ⛔ log2_max_pic_order_cnt_lsb_minus4 is a BIT COUNT: a slice header reads its
+// order count with it, so a reader given a wrong one is misaligned from that
+// field on. It was bounded AFTER a conversion to uint8, and that conversion
+// wraps: 1048576 becomes 0, so Log2MaxPOCLSB came out as 4 -- the smallest
+// legal width -- and the bound passed it.
+//
+// The two bit depths were not bounded at all and wrap the same way.
+func TestAWidthCheckedAfterTheCastThatWraps(t *testing.T) {
+	base := func() set { return set{subLayers: 1, chroma: 1, width: 64, height: 64} }
+
+	for _, c := range []struct {
+		name  string
+		value uint32
+	}{
+		{"one past the range", 13},
+		// ⛔ Each of these is a multiple of 256 away from a legal value, so
+		// uint8 narrows it to one. A bound after the cast passes all three.
+		{"wrapping to the smallest legal width", 256},
+		{"wrapping to zero", 252},
+		{"a million past the range", 1 << 20},
+	} {
+		s := base()
+		s.pocLSBMinus4 = c.value
+		if _, err := ParseSPS(s.build()); !errors.Is(err, ErrUnsupportedSPS) {
+			t.Errorf("%s (%d): err = %v, want ErrUnsupportedSPS", c.name, c.value, err)
+		}
+	}
+	// The same for the two bit depths, which were not bounded at all.
+	for _, c := range []struct {
+		name         string
+		luma, chroma uint32
+	}{
+		{"a luma depth one past the range", 7, 0},
+		{"a luma depth wrapping to zero", 256, 0},
+		{"a chroma depth one past the range", 0, 7},
+		{"a chroma depth wrapping to zero", 0, 1 << 20},
+	} {
+		s := base()
+		s.bdLuma, s.bdChroma = c.luma, c.chroma
+		if _, err := ParseSPS(s.build()); !errors.Is(err, ErrUnsupportedSPS) {
+			t.Errorf("%s: err = %v, want ErrUnsupportedSPS", c.name, err)
+		}
+	}
+	// Six is the largest depth the format allows -- 14 bits -- and must be read.
+	deep := base()
+	deep.bdLuma, deep.bdChroma = 6, 6
+	if sps, err := ParseSPS(deep.build()); err != nil || sps.BitDepthLuma != 14 {
+		t.Errorf("a depth of 6 gave %d, %v", sps.BitDepthLuma, err)
+	}
+
+	// Twelve is the largest the format allows and must be read: a bound one
+	// too tight refuses conformant sequences.
+	s := base()
+	s.pocLSBMinus4 = 12
+	sps, err := ParseSPS(s.build())
+	if err != nil || sps.Log2MaxPOCLSB != 16 {
+		t.Errorf("a width of 12 gave %d, %v", sps.Log2MaxPOCLSB, err)
 	}
 }
