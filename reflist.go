@@ -108,11 +108,14 @@ func buildList(set RefPicSet, second bool, active int, entries []uint32) ([]RefL
 	}
 	out := make([]RefListEntry, active)
 	for i, idx := range entries {
-		// An entry is as wide as Ceil(Log2(NumPicTotalCurr)) bits, which can
-		// hold values past the last picture: 3 pictures are named in 2 bits.
-		if int(idx) >= len(temp) {
-			return nil, fmt.Errorf("%w: entry %d names position %d of %d",
-				ErrRefLists, i, idx, len(temp))
+		// ⛔ Bounded by the PICTURES, 7.4.7.2, not by the temporary list it
+		// indexes -- which is longer whenever the list has more entries than
+		// there are pictures, and would let an index past the last picture
+		// through. The entries past that point only repeat the candidates, so
+		// nothing is lost by refusing them.
+		if int(idx) >= total {
+			return nil, fmt.Errorf("%w: entry %d names picture %d of %d",
+				ErrRefLists, i, idx, total)
 		}
 		out[i] = temp[idx]
 	}

@@ -161,8 +161,15 @@ default order standing; a list of no entries is a different thing, and the two
 must not be spelt the same way.
 
 An entry is `Ceil(Log2(NumPicTotalCurr))` bits wide, which holds values past the
-last picture -- three pictures are named in two bits -- so an index out of range
-is reachable from a field of conformant width. `Lists` refuses it.
+last picture — three pictures are named in two bits — so an index out of range
+is reachable from a field of conformant width.
+
+⛔ **An entry is bounded by the PICTURES, not by the temporary list it indexes**
+(7.4.7.2). The temporary list is longer whenever the list has more entries than
+there are pictures, and bounding on it lets an index past the last picture
+through. FFmpeg bounds on the temporary list; GStreamer enforces the clause and
+cites it. Nothing is lost by refusing them: the temporary list past
+`NumPicTotalCurr` only repeats the candidates.
 
 ### How a slice weighs what it predicts from
 

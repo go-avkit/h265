@@ -250,3 +250,35 @@ func TestListsNamesWhichListWasRefused(t *testing.T) {
 		t.Errorf("err = %q, want it to name list 1", got)
 	}
 }
+
+// TestAnEntryIsBoundedByThePicturesNotTheTemporaryList.
+//
+// ⛔ 7.4.7.2 puts list_entry in 0..NumPicTotalCurr-1. The TEMPORARY list it
+// indexes is longer whenever the list has more entries than there are
+// pictures, and bounding on that let an index past the last picture through --
+// which is what ffmpeg does and what this did. gstreamer enforces the clause,
+// and cites it.
+//
+// Nothing is lost by refusing them: the temporary list past NumPicTotalCurr
+// only repeats the candidates, so every picture is already namable below it.
+func TestAnEntryIsBoundedByThePicturesNotTheTemporaryList(t *testing.T) {
+	// Three pictures, a list of five: the temporary list is five long, so
+	// indices 3 and 4 exist in it and name nothing new.
+	set := RefPicSet{StCurrBefore: []int32{8, 4}, StCurrAfter: []int32{20}}
+	refs := asks(SliceP, 5, 0)
+	for _, idx := range []uint32{3, 4} {
+		refs.ListEntryL0 = []uint32{0, 1, 2, idx, 0}
+		if _, _, err := Lists(set, refs); !errors.Is(err, ErrRefLists) {
+			t.Errorf("entry %d of a 3-picture set: err = %v, want ErrRefLists", idx, err)
+		}
+	}
+	// The last picture must still be namable.
+	refs.ListEntryL0 = []uint32{2, 2, 2, 2, 2}
+	l0, _, err := Lists(set, refs)
+	if err != nil {
+		t.Fatalf("the last picture was refused: %v", err)
+	}
+	if got := pocs(l0); len(got) != 5 || got[0] != 20 {
+		t.Errorf("list 0 = %v, want five copies of 20", got)
+	}
+}

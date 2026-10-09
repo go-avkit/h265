@@ -288,3 +288,27 @@ func TestAHeaderThatEndsInTheFlagsBeforeTheCounts(t *testing.T) {
 		t.Error("a header that ends in the SAO flag was accepted")
 	}
 }
+
+// TestASliceNamingAPictureItDoesNotHave.
+//
+// ⛔ The field is Ceil(Log2(NumPicTotalCurr)) bits, which holds values past the
+// last picture -- three pictures are named in two bits -- so this is reachable
+// from a field of conformant WIDTH. 7.4.7.2 bounds the VALUE as well.
+func TestASliceNamingAPictureItDoesNotHave(t *testing.T) {
+	sps, pps := listSPS(), listPPS() // three usable pictures, two bits
+	u := sliceRefUnit(t, sps, pps, 7, sliceRefs{named: true, modL0: []uint32{3, 0}})
+	if _, err := ReferencesOf(u, sps, pps); !errors.Is(err, ErrSliceHeader) {
+		t.Errorf("err = %v, want ErrSliceHeader", err)
+	}
+	// Two is the last picture and must be read.
+	u = sliceRefUnit(t, sps, pps, 7, sliceRefs{named: true, modL0: []uint32{2, 2}})
+	refs, err := ReferencesOf(u, sps, pps)
+	if err != nil || len(refs.ListEntryL0) != 2 || refs.ListEntryL0[0] != 2 {
+		t.Errorf("the last picture gave %v, %v", refs.ListEntryL0, err)
+	}
+	// The same for list 1, which is read after list 0.
+	u = sliceRefUnit(t, sps, pps, 7, sliceRefs{named: true, asB: true, modL1: []uint32{0, 3}})
+	if _, err := ReferencesOf(u, sps, pps); !errors.Is(err, ErrSliceHeader) {
+		t.Errorf("list 1: err = %v, want ErrSliceHeader", err)
+	}
+}
