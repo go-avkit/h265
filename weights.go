@@ -8,6 +8,15 @@ import "fmt"
 // maxLog2WeightDenom is the largest shift 7.4.7.3 allows for either component.
 const maxLog2WeightDenom = 7
 
+// wpOffsetHalfRange is WpOffsetHalfRangeY and WpOffsetHalfRangeC, 7.4.7.3.
+//
+// ⛔ It is 1 << 7 unless high_precision_offsets_enabled_flag is set, and that
+// flag lives in the sequence RANGE EXTENSION, which this package does not read.
+// A stream that sets it states its offsets over a wider range and would be
+// refused here. Nothing in this package can tell: the extension sits past
+// everything ParseSPS consumes.
+const wpOffsetHalfRange = 1 << 7
+
 // RefWeight is how one reference picture is weighted, 7.4.7.3.
 //
 // Stated says the slice gave a weight for that component. Where it did not, the
@@ -120,6 +129,14 @@ func readWeightList(r *sticky, w PredWeights, chroma bool, n int) ([]RefWeight, 
 			}
 			e.LumaWeight = 1<<w.LumaLog2Denom + d
 			e.LumaOffset = r.se()
+			if r.err != nil {
+				return nil, r.err
+			}
+			// ⛔ The luma offset is added to a sample. Unbounded, it is not a
+			// bright picture: it is a number the arithmetic cannot carry.
+			if e.LumaOffset < -wpOffsetHalfRange || e.LumaOffset >= wpOffsetHalfRange {
+				return nil, fmt.Errorf("%w: a luma offset of %d", ErrSliceHeader, e.LumaOffset)
+			}
 		}
 		if chroma && chromaFlags&bit != 0 {
 			e.ChromaStated = true
@@ -131,19 +148,23 @@ func readWeightList(r *sticky, w PredWeights, chroma bool, n int) ([]RefWeight, 
 				if dw < -128 || dw > 127 {
 					return nil, fmt.Errorf("%w: a chroma weight difference of %d", ErrSliceHeader, dw)
 				}
-				if do < -(1<<17) || do > 1<<17 {
+				// ⛔ FOUR times the half range, 7.4.7.3 -- not the 1<<17
+				// ffmpeg uses, which is a guard against overflow in its own
+				// arithmetic rather than the range the format states. libde265
+				// bounds it as below, and the two disagree by 256 times.
+				if do < -4*wpOffsetHalfRange || do >= 4*wpOffsetHalfRange {
 					return nil, fmt.Errorf("%w: a chroma offset difference of %d", ErrSliceHeader, do)
 				}
 				e.ChromaWeight[j] = 1<<w.ChromaLog2Denom + dw
 				// ⛔ The chroma offset is not the difference the slice states:
 				// the weight has to be folded back out of it first, 7.4.7.3.
-				v := do - (128*e.ChromaWeight[j])>>w.ChromaLog2Denom + 128
-				e.ChromaOffset[j] = clip(v, -128, 127)
+				v := wpOffsetHalfRange + do - (wpOffsetHalfRange*e.ChromaWeight[j])>>w.ChromaLog2Denom
+				e.ChromaOffset[j] = clip(v, -wpOffsetHalfRange, wpOffsetHalfRange-1)
 			}
 		}
-		if r.err != nil {
-			return nil, r.err
-		}
+		// No check at the end of the iteration: every read above is followed by
+		// one, so a reader that failed has already been reported. Kept here it
+		// was unreachable, which the coverage gate said and a reader did not.
 	}
 	return out, nil
 }

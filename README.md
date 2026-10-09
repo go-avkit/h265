@@ -192,8 +192,22 @@ The chroma fields follow **`ChromaArrayType`**, as the SAO flag does.
 slice takes its motion from, and `MaxMergeCand` how many merge candidates it
 uses. The index is stated only where the list has more than one entry.
 
+⛔ **The offsets are bounded by the format, and two readers disagree on how
+much.** 7.4.7.3 allows a luma offset in `-128..127` and a chroma offset
+*difference* in `-512..511` — four times the half range. FFmpeg checks neither:
+it bounds the chroma difference at ±2¹⁷, which guards its own arithmetic rather
+than stating the format's range, and does not check the luma offset at all.
+[libde265](https://github.com/strukturag/libde265) enforces both. This package
+follows the tighter pair, and the boundaries are pinned on both sides.
+
 **Not here:** `slice_qp_delta` and the fields after it. `ReferencesOf` stops
 once it has everything about the pictures.
+
+⛔ **No sequence range extension.** `WpOffsetHalfRange` is `1 << 7` unless
+`high_precision_offsets_enabled_flag` is set, and that flag lives in a sequence
+extension this package does not read — it sits past everything `ParseSPS`
+consumes. A stream that sets it states its offsets over a wider range and would
+be refused here, and nothing in this package can tell.
 
 A picture may be carried by several slice segments, and only the one with
 `first_slice_segment_in_pic_flag` set begins a new picture. That is what
