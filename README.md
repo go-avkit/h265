@@ -221,6 +221,21 @@ A picture may be carried by several slice segments, and only the one with
 `SplitPictures` counts, which is how a stream's pictures are counted without
 decoding any of them.
 
+## A width is read before it is narrowed
+
+⛔ **`log2_max_pic_order_cnt_lsb_minus4` is a BIT COUNT** — a slice header reads
+its order count with it, so a reader given a wrong one is misaligned from that
+field onwards.
+
+It was bounded, and the bound did not hold: the value was narrowed to `uint8`
+*before* the check, and that conversion **wraps**. `1048576` becomes `0`, so the
+width came out as 4 — the smallest legal one — and a value a million past the
+range read as conformant. The two bit depths were narrowed the same way and not
+bounded at all.
+
+Every one of them is now read as a full `uint32`, checked against 7.4.3.2.1's
+range, and narrowed afterwards. Both boundaries are pinned.
+
 ## Sibling
 
 [`go-avkit/h264`](https://github.com/go-avkit/h264) is the same layer for

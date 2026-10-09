@@ -119,13 +119,32 @@ func ParseSPS(u Unit) (SPS, error) {
 		s.WinLeft, s.WinRight = r.ue(), r.ue()
 		s.WinTop, s.WinBottom = r.ue(), r.ue()
 	}
-	s.BitDepthLuma = uint8(r.ue()) + 8
-	s.BitDepthChroma = uint8(r.ue()) + 8
-	s.Log2MaxPOCLSB = uint8(r.ue()) + 4
-	if s.Log2MaxPOCLSB > 16 {
-		// 7.4.3.2.1 bounds log2_max_pic_order_cnt_lsb_minus4 at 12.
-		return s, fmt.Errorf("%w: log2 max poc lsb of %d", ErrUnsupportedSPS, s.Log2MaxPOCLSB)
+	// ⛔ Each of these is read and bounded BEFORE the conversion that narrows
+	// it. uint8(1048576) is 0, so a value a million past the range comes out
+	// looking like the smallest legal one -- and a bound applied afterwards
+	// passes it. That is how the check below used to be written.
+	//
+	// The two bit depths are 7.4.3.2.1's 0..6, and the order count width its
+	// 0..12. The last is a BIT COUNT that a slice header reads a field with:
+	// a reader given a wrong one is misaligned from that field on.
+	bdY, bdC, pocW := r.ue(), r.ue(), r.ue()
+	if r.err != nil {
+		return s, r.err
 	}
+	for _, f := range []struct {
+		name  string
+		v, hi uint32
+	}{
+		{"bit_depth_luma_minus8", bdY, 6},
+		{"bit_depth_chroma_minus8", bdC, 6},
+		{"log2_max_pic_order_cnt_lsb_minus4", pocW, 12},
+	} {
+		if f.v > f.hi {
+			return s, fmt.Errorf("%w: %s of %d, at most %d", ErrUnsupportedSPS, f.name, f.v, f.hi)
+		}
+	}
+	s.BitDepthLuma, s.BitDepthChroma = uint8(bdY)+8, uint8(bdC)+8
+	s.Log2MaxPOCLSB = uint8(pocW) + 4
 
 	s.skipSubLayerOrdering(r)
 	s.skipCodingBlockSizes(r)
