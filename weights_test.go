@@ -246,7 +246,15 @@ func TestAWeightTableRefusesWhatItCannotMean(t *testing.T) {
 		{"a chroma difference past a byte", weightTable{
 			l0: []weightEntry{{chroma: true, dChroma: [2]int32{-129, 0}}, {}}}},
 		{"a chroma offset difference past its range", weightTable{
-			l0: []weightEntry{{chroma: true, dChromaOff: [2]int32{1 << 18, 0}}, {}}}},
+			l0: []weightEntry{{chroma: true, dChromaOff: [2]int32{512, 0}}, {}}}},
+		{"a chroma offset difference below its range", weightTable{
+			l0: []weightEntry{{chroma: true, dChromaOff: [2]int32{0, -513}}, {}}}},
+		// ⛔ The luma offset is added to a sample and was unbounded until a
+		// SECOND reader was consulted: ffmpeg does not check it at all.
+		{"a luma offset past the half range", weightTable{
+			l0: []weightEntry{{luma: true, lumaOffset: 128}, {}}}},
+		{"a luma offset below the half range", weightTable{
+			l0: []weightEntry{{luma: true, lumaOffset: -129}, {}}}},
 	} {
 		tbl := c.tbl
 		u := sliceRefUnit(t, sps, pps, 7, sliceRefs{named: true, weights: &tbl})
@@ -440,7 +448,7 @@ func TestEveryFieldOfTheWeightTableIsChecked(t *testing.T) {
 		{lumaDenom: 7, chromaDelta: -7, l0: []weightEntry{{chroma: true}, {}}},
 		{lumaDenom: 4, chromaDelta: 2, l0: []weightEntry{
 			{luma: true, dLuma: 100, lumaOffset: -120, chroma: true,
-				dChroma: [2]int32{60, -60}, dChromaOff: [2]int32{1 << 16, -(1 << 16)}},
+				dChroma: [2]int32{60, -60}, dChromaOff: [2]int32{511, -512}},
 			{luma: true, dLuma: -100, lumaOffset: 120},
 		}},
 		{lumaDenom: 1, chromaDelta: 1, l0: []weightEntry{
@@ -473,5 +481,63 @@ func TestAWeightListForAnImpossibleCount(t *testing.T) {
 	u := sliceRefUnit(t, sps, pps, 7, sliceRefs{named: true})
 	if _, err := ReferencesOf(u, sps, pps); !errors.Is(err, ErrSliceHeader) {
 		t.Errorf("err = %v, want ErrSliceHeader", err)
+	}
+}
+
+// TestTheOffsetBoundariesAreReadOnBothSides.
+//
+// ⛔ A bound that is one too tight refuses conformant streams, and one too
+// loose is the hole it was meant to close. 7.4.7.3 allows a luma offset in
+// -128..127 and a chroma offset DIFFERENCE in -512..511 -- four times the half
+// range, which ffmpeg does not enforce and libde265 does.
+func TestTheOffsetBoundariesAreReadOnBothSides(t *testing.T) {
+	sps, pps := listSPS(), weightPPS()
+	for _, c := range []struct {
+		name       string
+		lumaOffset int32
+		dChroma    int32
+	}{
+		{"the floors", -128, -512},
+		{"the ceilings", 127, 511},
+	} {
+		u := sliceRefUnit(t, sps, pps, 7, sliceRefs{named: true,
+			weights: &weightTable{lumaDenom: 2, l0: []weightEntry{
+				{luma: true, lumaOffset: c.lumaOffset,
+					chroma: true, dChromaOff: [2]int32{c.dChroma, c.dChroma}},
+				{},
+			}}})
+		refs, err := ReferencesOf(u, sps, pps)
+		if err != nil {
+			t.Errorf("%s: refused a conformant slice: %v", c.name, err)
+			continue
+		}
+		if got := refs.Weights.L0[0].LumaOffset; got != c.lumaOffset {
+			t.Errorf("%s: luma offset %d, want %d", c.name, got, c.lumaOffset)
+		}
+	}
+}
+
+// TestAFailedReadReturnsZero.
+//
+// ⛔ A range check runs on whatever the reader handed back, including on the
+// read that FAILED. Checking that value is safe only because a failed read
+// returns zero, which is in every range here -- so a truncated stream is
+// reported as truncation rather than as a value it never carried.
+//
+// Pinning it makes it part of the contract rather than something that happened
+// to hold while the bounds were written.
+func TestAFailedReadReturnsZero(t *testing.T) {
+	for _, data := range [][]byte{{0x00}, {0x00, 0x00}, {0x01}, {0x02}, {}} {
+		r := newSticky(data)
+		if v := r.se(); v != 0 {
+			t.Errorf("se() on %v returned %d, want 0", data, v)
+		}
+		if r.err == nil {
+			t.Errorf("se() on %v reported no error", data)
+		}
+		r = newSticky(data)
+		if v := r.ue(); v != 0 {
+			t.Errorf("ue() on %v returned %d, want 0", data, v)
+		}
 	}
 }
