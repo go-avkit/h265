@@ -29,6 +29,7 @@ picture boundaries, or hand slices to something that does decode.
 | `POCCounter`, `POC` | picture order counts, clause 8.3.1 |
 | `ShortTermRPS`, `RefPic`, `LongTermRefPic` | the reference picture sets a sequence carries |
 | `ReferencesOf`, `PictureRefs`, `LongTermRef` | what one coded picture says it still needs |
+| `Derive`, `RefPicSet`, `LtPicture` | the pictures a decoder must keep for it, clause 8.3.2 |
 | `ShortHeaderError` | a unit that ended inside the syntax, said as such |
 
 ⛔ **HEVC's slice types are not H.264's.** Here `B` is 0, `P` is 1 and `I` is 2 —
@@ -97,6 +98,24 @@ would be ambiguous.
 
 An IDR says nothing, and that is not an error: it begins a coded video sequence,
 so nothing before it is available and nothing after it may reach back.
+
+`Derive` turns that into the five lists 8.3.2 names, given the picture's own
+order count. The short-term entries are relative and become absolute here.
+
+⛔ **`Curr` and `Foll` are not the same thing.** A picture in `Curr` may be
+predicted from by this picture. One in `Foll` may **not** — it is listed because
+a LATER picture will want it, and a decoder that dropped it would break that one
+instead. Both must be kept; only one may be used.
+
+⛔ A long-term picture's count is **exact only when the slice stated its high
+bits**; otherwise it is the low bits, and the picture meant is whichever held
+matches them. `LtPicture.Exact` says which, because handing a decoder low bits
+as though they were a count is a wrong answer that looks like a right one.
+
+The high bits are stated as a number of wraps that **accumulates** across the
+entries — each counted from the one before, not from zero — and the count starts
+afresh for the slice's own entries after the sequence's. Two entries each
+stating one wrap are 256 and 512 back, not 256 twice.
 
 A picture may be carried by several slice segments, and only the one with
 `first_slice_segment_in_pic_flag` set begins a new picture. That is what
