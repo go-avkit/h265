@@ -208,12 +208,15 @@ func readSliceLists(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
 	// Nothing is stated when there is only one picture to choose from: there is
 	// no other order it could be put in.
 	if pps.ListsModification && total > 1 {
-		width := ceilLog2(total)
+		var err error
 		if r.flag() { // ref_pic_list_modification_flag_l0
-			out.ListEntryL0 = readListEntries(r, width, int(out.NumRefIdxL0Active))
+			out.ListEntryL0, err = readListEntries(r, total, int(out.NumRefIdxL0Active))
 		}
-		if out.Type == SliceB && r.flag() { // ref_pic_list_modification_flag_l1
-			out.ListEntryL1 = readListEntries(r, width, int(out.NumRefIdxL1Active))
+		if err == nil && out.Type == SliceB && r.flag() { // ..._flag_l1
+			out.ListEntryL1, err = readListEntries(r, total, int(out.NumRefIdxL1Active))
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return readSlicePrediction(r, sps, pps, out)
@@ -248,9 +251,12 @@ func readSlicePrediction(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
 		// would consume a field that is not there.
 		if n > 1 {
 			out.CollocatedRefIdx = r.ue()
-			if r.err != nil {
-				return r.err
-			}
+			// No check on the reader here: a failed read returns zero, which
+			// is below n whenever n is above one, so a truncated stream is
+			// reported by the check after five_minus_max_num_merge_cand rather
+			// than as a picture it never named. TestAFailedReadReturnsZero
+			// holds that. ⛔ Ablating this guard left the suite green, which
+			// is what said it changed nothing.
 			if out.CollocatedRefIdx >= n {
 				return fmt.Errorf("%w: a collocated picture at %d of %d",
 					ErrSliceHeader, out.CollocatedRefIdx, n)
@@ -282,12 +288,26 @@ func readSlicePrediction(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
 // ⛔ The width is taken from NumPicTotalCurr and the COUNT from the active
 // entries. They are different numbers: a list may be longer or shorter than the
 // pictures available.
-func readListEntries(r *sticky, width, n int) []uint32 {
+//
+// ⛔ And the VALUE is bounded by NumPicTotalCurr too, 7.4.7.2 -- not by the
+// temporary list it indexes, which is longer when the list has more entries
+// than there are pictures. The field is Ceil(Log2(N)) bits wide, so it holds
+// values past the last picture: three pictures are named in two bits.
+func readListEntries(r *sticky, total, n int) ([]uint32, error) {
+	width := ceilLog2(total)
 	out := make([]uint32, 0, n)
-	for i := 0; i < n && r.err == nil; i++ {
-		out = append(out, r.bits(width))
+	for i := 0; i < n; i++ {
+		v := r.bits(width)
+		if r.err != nil {
+			return nil, r.err
+		}
+		if int(v) >= total {
+			return nil, fmt.Errorf("%w: entry %d names picture %d of %d",
+				ErrSliceHeader, i, v, total)
+		}
+		out = append(out, v)
 	}
-	return out
+	return out, nil
 }
 
 // chromaArrayType is 7.4.3.2.1: the chroma format EXCEPT where the planes are
