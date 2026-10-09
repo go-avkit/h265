@@ -18,6 +18,31 @@ type sliceRefs struct {
 	ltFromS  int         // long-term entries taken from the sequence's list
 	ltStated []uint32    // long-term entries stated here, by their low bits
 	ltMSB    bool        // each entry also states its high bits
+
+	// asB and asI change the slice type, which is P unless one is set. ⛔ The
+	// zero value of SliceType is B, so a single field would make every test
+	// that did not set it a B slice.
+	asB bool
+	asI bool
+	// override writes num_ref_idx_active_override_flag and the counts below,
+	// each as the minus-one the syntax carries.
+	override bool
+	l0Minus1 uint32
+	l1Minus1 uint32
+	// modL0 and modL1 write ref_pic_lists_modification. A nil list writes the
+	// flag as zero, which is NOT the same as an empty one.
+	modL0 []uint32
+	modL1 []uint32
+}
+
+func (s sliceRefs) kind() SliceType {
+	switch {
+	case s.asB:
+		return SliceB
+	case s.asI:
+		return SliceI
+	}
+	return SliceP
 }
 
 // sliceRefUnit builds a first slice segment carrying a picture order count and
@@ -30,7 +55,7 @@ func sliceRefUnit(t *testing.T, sps SPS, pps PPS, lsb uint32, refs sliceRefs) Un
 	for i := uint8(0); i < pps.ExtraSliceHeaderBits; i++ {
 		w.bit(0)
 	}
-	w.ue(uint32(SliceP))
+	w.ue(uint32(refs.kind()))
 	if pps.OutputFlagPresent {
 		w.bit(1)
 	}
@@ -93,11 +118,99 @@ func sliceRefUnit(t *testing.T, sps SPS, pps PPS, lsb uint32, refs sliceRefs) Un
 			}
 		}
 	}
+	writeSliceLists(&w, sps, pps, refs)
+
 	w.bit(1)
 	for w.n != 0 {
 		w.bit(0)
 	}
 	return Unit{Type: UnitTrailR, Payload: w.b}
+}
+
+// writeSliceLists writes what follows the long-term entries, as far as this
+// package reads.
+func writeSliceLists(w *bitbuf, sps SPS, pps PPS, refs sliceRefs) {
+	if sps.TemporalMVPEnabled {
+		w.bit(0) // slice_temporal_mvp_enabled_flag
+	}
+	if sps.SAOEnabled {
+		w.bit(0) // slice_sao_luma_flag
+		if !sps.SeparatePlanes && sps.ChromaFormat != 0 {
+			w.bit(0) // slice_sao_chroma_flag
+		}
+	}
+	kind := refs.kind()
+	if kind != SliceP && kind != SliceB {
+		return
+	}
+	l0, l1 := pps.NumRefIdxL0, pps.NumRefIdxL1
+	if refs.override {
+		w.bit(1)
+		w.ue(refs.l0Minus1)
+		l0 = refs.l0Minus1 + 1
+		if kind == SliceB {
+			w.ue(refs.l1Minus1)
+			l1 = refs.l1Minus1 + 1
+		}
+	} else {
+		w.bit(0)
+	}
+	total := refsTotalCurr(sps, refs)
+	if !pps.ListsModification || total <= 1 {
+		return
+	}
+	width := ceilLog2(total)
+	writeOne := func(entries []uint32, n uint32) {
+		if entries == nil {
+			w.bit(0)
+			return
+		}
+		w.bit(1)
+		for i := uint32(0); i < n; i++ {
+			v := uint32(0)
+			if int(i) < len(entries) {
+				v = entries[i]
+			}
+			w.bits(v, width)
+		}
+	}
+	writeOne(refs.modL0, l0)
+	if kind == SliceB {
+		writeOne(refs.modL1, l1)
+	}
+}
+
+// refsTotalCurr counts the pictures the slice above may predict from, which is
+// what the width of a list_entry is taken from.
+func refsTotalCurr(sps SPS, refs sliceRefs) int {
+	n := 0
+	switch {
+	case refs.named && int(refs.index) < len(sps.ShortTermRefPicSets):
+		set := sps.ShortTermRefPicSets[refs.index]
+		for _, e := range append(append([]RefPic{}, set.Before...), set.After...) {
+			if e.Used {
+				n++
+			}
+		}
+	case refs.named:
+		// A test that names a set the sequence does not carry: the header is
+		// refused before any of this is reached, so the count does not matter.
+		n = 0
+	case refs.predict && len(sps.ShortTermRefPicSets) > 0:
+		n = sps.ShortTermRefPicSets[len(sps.ShortTermRefPicSets)-1].Count() + 1
+	case refs.predict:
+		n = 0
+	default:
+		for _, g := range refs.inline {
+			for _, e := range g {
+				if e.used {
+					n++
+				}
+			}
+		}
+	}
+	// Every long-term entry this builder writes is marked used.
+	return n + refs.ltFromS + len(refs.ltStated)
 }
 
 func spsWithSets(sets ...[2][]refGap) SPS {
@@ -309,13 +422,38 @@ func TestReferencesOfRefusesEveryWayItCan(t *testing.T) {
 	if _, err := ReferencesOf(whole, sps, PPS{}); err != nil {
 		t.Fatalf("the whole slice stopped parsing: %v", err)
 	}
-	// Cut at every length and check nothing short is ever accepted: each cut
-	// lands in a different field, which is the point.
+	// Cut at every length: each cut lands in a different field, which is the
+	// point. Find the shortest payload still accepted, and check every shorter
+	// one is refused.
+	//
+	// ⛔ This used to assert that EVERY cut short of the whole was refused, and
+	// it passed by an accident of byte alignment: the header happened to end on
+	// a byte boundary with no slack. One more bit in the header put the stop bit
+	// in a byte of its own, and the second-to-last cut became a complete header
+	// -- correctly accepted, and read as a regression. Pinning the boundary
+	// says what is actually being measured.
+	shortest := len(whole.Payload)
 	for n := 1; n < len(whole.Payload); n++ {
 		short := Unit{Type: UnitTrailR, Payload: whole.Payload[:n]}
 		if _, err := ReferencesOf(short, sps, PPS{}); err == nil {
-			t.Errorf("%d of %d bytes: accepted", n, len(whole.Payload))
+			shortest = n
+			break
 		}
+	}
+	for n := 1; n < shortest; n++ {
+		short := Unit{Type: UnitTrailR, Payload: whole.Payload[:n]}
+		if _, err := ReferencesOf(short, sps, PPS{}); err == nil {
+			t.Errorf("%d of %d bytes: accepted, yet %d is the shortest complete header",
+				n, len(whole.Payload), shortest)
+		}
+	}
+	// The fixture must be TIGHT: a header ending well before the payload would
+	// make the loop above test the padding rather than the fields.
+	if d := len(whole.Payload) - shortest; d > 1 {
+		t.Errorf("the header ends %d bytes before the payload; the cuts are not landing in fields", d)
+	}
+	if shortest < 2 {
+		t.Errorf("the whole header fits in %d bytes; the fixture is too small to cut", shortest)
 	}
 }
 

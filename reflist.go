@@ -3,6 +3,14 @@
 
 package h265
 
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrRefLists means a slice asked for a reference list that cannot be built.
+var ErrRefLists = errors.New("h265: reference list cannot be built")
+
 // RefListEntry is one entry of a reference picture list.
 type RefListEntry struct {
 	POC int32
@@ -22,34 +30,39 @@ type RefListEntry struct {
 // comes after. A decoder handed them the same way round predicts a B slice from
 // the wrong side.
 //
-// l0Active and l1Active are how many entries each list has -- the picture
-// parameter set states them and a slice may override them. A list SHORTER than
-// the pictures available simply stops; a list LONGER repeats them, which is
-// legal and is why this cycles rather than filling once.
-//
-// ⛔ An active count above MaxRefIdxActive is refused by ParsePPS, but Lists is
-// also reachable with a count a caller worked out itself, so it bounds the
-// count again here. The entries are small and the count is a 32-bit syntax
-// element: a handful of bytes otherwise asks for tens of gigabytes.
+// refs carries how many entries each list has and, where the slice stated one,
+// the order its entries are taken in. A list SHORTER than the pictures
+// available simply stops; a list LONGER repeats them, which is legal and is why
+// the candidates are cycled rather than laid down once.
 //
 // An I slice predicts from nothing and gets no lists. A P slice gets list 0.
-func Lists(set RefPicSet, sliceType SliceType, l0Active, l1Active int) (l0, l1 []RefListEntry) {
-	if sliceType == SliceI {
-		return nil, nil
+func Lists(set RefPicSet, refs PictureRefs) (l0, l1 []RefListEntry, err error) {
+	if refs.Type == SliceI {
+		return nil, nil, nil
 	}
-	l0 = buildList(set, false, l0Active)
-	if sliceType == SliceB {
-		l1 = buildList(set, true, l1Active)
+	l0, err = buildList(set, false, int(refs.NumRefIdxL0Active), refs.ListEntryL0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list 0: %w", err)
 	}
-	return l0, l1
+	if refs.Type == SliceB {
+		if l1, err = buildList(set, true, int(refs.NumRefIdxL1Active), refs.ListEntryL1); err != nil {
+			return nil, nil, fmt.Errorf("list 1: %w", err)
+		}
+	}
+	return l0, l1, nil
 }
 
 // buildList concatenates the candidates in the order the list wants, repeating
-// them until it is long enough, then cuts it to length.
-func buildList(set RefPicSet, second bool, active int) []RefListEntry {
+// them until it is long enough, then takes the entries the slice asked for.
+func buildList(set RefPicSet, second bool, active int, entries []uint32) ([]RefListEntry, error) {
 	if active <= 0 {
-		return nil
+		return nil, nil
 	}
+	// ⛔ An active count above MaxRefIdxActive is refused where a count is READ,
+	// in ParsePPS and in the slice header. This is reachable with a count a
+	// caller worked out itself: the entries are small and the count is a
+	// 32-bit syntax element, so a handful of bytes otherwise asks for tens of
+	// gigabytes.
 	if active > MaxRefIdxActive {
 		active = MaxRefIdxActive
 	}
@@ -59,20 +72,49 @@ func buildList(set RefPicSet, second bool, active int) []RefListEntry {
 	}
 	// Nothing to cycle: a list cannot be filled from no pictures, and looping
 	// for one would not end.
-	if len(first)+len(after)+len(set.LtCurr) == 0 {
-		return nil
+	total := len(first) + len(after) + len(set.LtCurr)
+	if total == 0 {
+		return nil, nil
 	}
-	out := make([]RefListEntry, 0, active)
-	for len(out) < active {
+
+	// ⛔ The TEMPORARY list is as long as the GREATER of the active count and
+	// the pictures available, and an entry the slice names indexes into THAT.
+	// Cutting to the active count first would refuse a legal index, because a
+	// slice may name a picture beyond the end of its own list.
+	tempLen := active
+	if total > tempLen {
+		tempLen = total
+	}
+	temp := make([]RefListEntry, 0, tempLen)
+	for len(temp) < tempLen {
 		for _, p := range first {
-			out = append(out, RefListEntry{POC: p, Exact: true})
+			temp = append(temp, RefListEntry{POC: p, Exact: true})
 		}
 		for _, p := range after {
-			out = append(out, RefListEntry{POC: p, Exact: true})
+			temp = append(temp, RefListEntry{POC: p, Exact: true})
 		}
 		for _, p := range set.LtCurr {
-			out = append(out, RefListEntry{POC: p.POC, LongTerm: true, Exact: p.Exact})
+			temp = append(temp, RefListEntry{POC: p.POC, LongTerm: true, Exact: p.Exact})
 		}
 	}
-	return out[:active]
+	temp = temp[:tempLen]
+
+	if entries == nil {
+		return temp[:active], nil
+	}
+	if len(entries) != active {
+		return nil, fmt.Errorf("%w: %d entries stated for %d active references",
+			ErrRefLists, len(entries), active)
+	}
+	out := make([]RefListEntry, active)
+	for i, idx := range entries {
+		// An entry is as wide as Ceil(Log2(NumPicTotalCurr)) bits, which can
+		// hold values past the last picture: 3 pictures are named in 2 bits.
+		if int(idx) >= len(temp) {
+			return nil, fmt.Errorf("%w: entry %d names position %d of %d",
+				ErrRefLists, i, idx, len(temp))
+		}
+		out[i] = temp[idx]
+	}
+	return out, nil
 }

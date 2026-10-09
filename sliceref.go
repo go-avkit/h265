@@ -34,6 +34,47 @@ type PictureRefs struct {
 	// rather than stated by the slice, and SetIndex says which.
 	NamedSet bool
 	SetIndex int
+
+	// Type is how the slice is coded. An I slice predicts from nothing, so the
+	// fields below are not stated for one.
+	Type SliceType
+	// NumRefIdxL0Active and NumRefIdxL1Active are how many entries each
+	// reference list has. They start at the picture parameter set's and a
+	// slice may override them.
+	NumRefIdxL0Active uint32
+	NumRefIdxL1Active uint32
+	// ListEntryL0 and ListEntryL1 are ref_pic_lists_modification, 7.3.6.2: the
+	// position in the temporary list that each entry of the final list is
+	// taken from. nil means the slice stated no modification for that list and
+	// the default order stands -- which is NOT the same as an empty slice.
+	ListEntryL0 []uint32
+	ListEntryL1 []uint32
+}
+
+// numPicTotalCurr is 7.4.7.2: how many pictures this slice may predict from,
+// counting only those marked used. It is what the width of a list_entry is
+// taken from, and a P or B slice with none of them is malformed.
+//
+// The current-picture-as-reference of the screen content extension is not
+// counted, because this package does not read that extension.
+func (p PictureRefs) numPicTotalCurr() int {
+	n := 0
+	for _, e := range p.ShortTerm.Before {
+		if e.Used {
+			n++
+		}
+	}
+	for _, e := range p.ShortTerm.After {
+		if e.Used {
+			n++
+		}
+	}
+	for _, e := range p.LongTerm {
+		if e.Used {
+			n++
+		}
+	}
+	return n
 }
 
 // ReferencesOf reads what a coded picture says it still needs.
@@ -53,7 +94,7 @@ func ReferencesOf(u Unit, sps SPS, pps PPS) (PictureRefs, error) {
 	if u.Type.IsIDR() {
 		return out, nil
 	}
-	r, _, err := walkToPOC(u, sps, pps)
+	r, _, sliceType, err := walkToPOC(u, sps, pps)
 	if err != nil {
 		return out, err
 	}
@@ -91,7 +132,101 @@ func ReferencesOf(u Unit, sps SPS, pps PPS) (PictureRefs, error) {
 	if err := readSliceLongTerm(r, sps, &out); err != nil {
 		return out, err
 	}
+	out.Type = sliceType
+	if err := readSliceLists(r, sps, pps, &out); err != nil {
+		return out, err
+	}
 	return out, nil
+}
+
+// readSliceLists reads what the slice says about its reference lists: how many
+// entries each has, and the order they are taken in.
+//
+// The two flags before them state nothing this package keeps, but both are
+// CONDITIONAL on the sequence, and a reader that guessed either is misaligned
+// from that point on.
+func readSliceLists(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
+	if sps.TemporalMVPEnabled {
+		r.bit() // slice_temporal_mvp_enabled_flag
+	}
+	if sps.SAOEnabled {
+		r.bit() // slice_sao_luma_flag
+		// ⛔ ChromaArrayType, not chroma_format_idc. They differ by exactly one
+		// case: separate colour planes make the format 4:4:4 and the array type
+		// ZERO, so a reader using the format reads a bit that is not there.
+		if chromaArrayType(sps) != 0 {
+			r.bit() // slice_sao_chroma_flag
+		}
+	}
+	if out.Type != SliceP && out.Type != SliceB {
+		return r.err
+	}
+
+	out.NumRefIdxL0Active, out.NumRefIdxL1Active = pps.NumRefIdxL0, pps.NumRefIdxL1
+	if r.flag() { // num_ref_idx_active_override_flag
+		// ⛔ Read before the +1, and bounded here: see ErrRefIdxRange. A slice
+		// may override the set's counts, so bounding the set alone would leave
+		// this door open.
+		l0 := r.ue()
+		l1 := uint32(0)
+		if out.Type == SliceB {
+			l1 = r.ue()
+		}
+		if r.err != nil {
+			return r.err
+		}
+		if l0 >= MaxRefIdxActive || l1 >= MaxRefIdxActive {
+			return fmt.Errorf("%w: a slice states %d and %d", ErrRefIdxRange, l0, l1)
+		}
+		out.NumRefIdxL0Active = l0 + 1
+		if out.Type == SliceB {
+			out.NumRefIdxL1Active = l1 + 1
+		}
+	}
+
+	total := out.numPicTotalCurr()
+	if r.err != nil {
+		return r.err
+	}
+	if total == 0 {
+		return fmt.Errorf("%w: a %s slice that may predict from no picture", ErrSliceHeader, out.Type)
+	}
+	// Nothing is stated when there is only one picture to choose from: there is
+	// no other order it could be put in.
+	if !pps.ListsModification || total <= 1 {
+		return r.err
+	}
+	width := ceilLog2(total)
+	if r.flag() { // ref_pic_list_modification_flag_l0
+		out.ListEntryL0 = readListEntries(r, width, int(out.NumRefIdxL0Active))
+	}
+	if out.Type == SliceB && r.flag() { // ref_pic_list_modification_flag_l1
+		out.ListEntryL1 = readListEntries(r, width, int(out.NumRefIdxL1Active))
+	}
+	return r.err
+}
+
+// readListEntries reads one list's entries, each as wide as the number of
+// pictures to choose from needs.
+//
+// ⛔ The width is taken from NumPicTotalCurr and the COUNT from the active
+// entries. They are different numbers: a list may be longer or shorter than the
+// pictures available.
+func readListEntries(r *sticky, width, n int) []uint32 {
+	out := make([]uint32, 0, n)
+	for i := 0; i < n && r.err == nil; i++ {
+		out = append(out, r.bits(width))
+	}
+	return out
+}
+
+// chromaArrayType is 7.4.3.2.1: the chroma format EXCEPT where the planes are
+// coded separately, which makes every plane monochrome.
+func chromaArrayType(sps SPS) uint8 {
+	if sps.SeparatePlanes {
+		return 0
+	}
+	return sps.ChromaFormat
 }
 
 // readSliceLongTerm reads the long-term pictures a slice names: some out of the

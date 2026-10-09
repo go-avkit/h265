@@ -49,6 +49,12 @@ type SPS struct {
 	// ShortTermRefPicSets are the sets a slice may name instead of stating one
 	// of its own, in the order the sequence lists them. A set may be written as
 	// a difference from an earlier one, so the order is load-bearing.
+	// SAOEnabled and TemporalMVPEnabled are not used here, but a slice header
+	// cannot be read without them: both decide whether a field is present,
+	// and a reader without them is misaligned from that point on.
+	SAOEnabled         bool
+	TemporalMVPEnabled bool
+
 	ShortTermRefPicSets []ShortTermRPS
 	// LongTermRefPics are the long-term pictures the sequence offers, named by
 	// the low bits of their order count.
@@ -130,8 +136,8 @@ func ParseSPS(u Unit) (SPS, error) {
 			skipScalingListData(r)
 		}
 	}
-	r.bit()       // amp_enabled_flag
-	r.bit()       // sample_adaptive_offset_enabled_flag
+	r.bit() // amp_enabled_flag
+	s.SAOEnabled = r.flag()
 	if r.flag() { // pcm_enabled_flag
 		r.bits(4) // pcm_sample_bit_depth_luma_minus1
 		r.bits(4) // pcm_sample_bit_depth_chroma_minus1
@@ -146,6 +152,7 @@ func ParseSPS(u Unit) (SPS, error) {
 		return s, err
 	}
 	s.readLongTermRefPics(r)
+	s.TemporalMVPEnabled = r.flag()
 
 	if r.err != nil {
 		return s, r.err
