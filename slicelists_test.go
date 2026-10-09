@@ -13,6 +13,10 @@ import (
 func listSPS() SPS {
 	s := spsWithSets([2][]refGap{{{1, true}, {2, true}}, {{3, true}}})
 	s.Log2MaxPOCLSB = 8
+	// ⛔ 4:2:0, not the zero value. A monochrome sequence states no chroma
+	// field at all, so a fixture left at zero cannot reach half of what the
+	// weight table says.
+	s.ChromaFormat = 1
 	return s
 }
 
