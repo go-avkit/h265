@@ -49,6 +49,20 @@ type PictureRefs struct {
 	// the default order stands -- which is NOT the same as an empty slice.
 	ListEntryL0 []uint32
 	ListEntryL1 []uint32
+
+	// TemporalMVP says the slice predicts motion from another picture, which
+	// is what the two fields below name.
+	TemporalMVP bool
+	// CollocatedFromL0 says which list the picture is taken from, and
+	// CollocatedRefIdx its position in that list. Both are only meaningful
+	// while TemporalMVP is set.
+	CollocatedFromL0 bool
+	CollocatedRefIdx uint32
+	// Weights is pred_weight_table, nil where the picture parameter set does
+	// not weight this kind of slice.
+	Weights *PredWeights
+	// MaxMergeCand is 5 - five_minus_max_num_merge_cand, in 1..5.
+	MaxMergeCand uint8
 }
 
 // numPicTotalCurr is 7.4.7.2: how many pictures this slice may predict from,
@@ -147,7 +161,7 @@ func ReferencesOf(u Unit, sps SPS, pps PPS) (PictureRefs, error) {
 // from that point on.
 func readSliceLists(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
 	if sps.TemporalMVPEnabled {
-		r.bit() // slice_temporal_mvp_enabled_flag
+		out.TemporalMVP = r.flag()
 	}
 	if sps.SAOEnabled {
 		r.bit() // slice_sao_luma_flag
@@ -193,17 +207,73 @@ func readSliceLists(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
 	}
 	// Nothing is stated when there is only one picture to choose from: there is
 	// no other order it could be put in.
-	if !pps.ListsModification || total <= 1 {
+	if pps.ListsModification && total > 1 {
+		width := ceilLog2(total)
+		if r.flag() { // ref_pic_list_modification_flag_l0
+			out.ListEntryL0 = readListEntries(r, width, int(out.NumRefIdxL0Active))
+		}
+		if out.Type == SliceB && r.flag() { // ref_pic_list_modification_flag_l1
+			out.ListEntryL1 = readListEntries(r, width, int(out.NumRefIdxL1Active))
+		}
+	}
+	return readSlicePrediction(r, sps, pps, out)
+}
+
+// readSlicePrediction reads the rest of what a P or B slice says about how it
+// predicts: which picture its motion comes from, how each reference is
+// weighted, and how many merge candidates it uses.
+//
+// Two fields here are read and not kept -- mvd_l1_zero_flag and
+// cabac_init_flag. Neither says anything about the pictures a caller of this
+// package is after, and both still have to be consumed: one is conditional on
+// the slice type and the other on the picture parameter set.
+func readSlicePrediction(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
+	if out.Type == SliceB {
+		r.bit() // mvd_l1_zero_flag
+	}
+	if pps.CABACInitPresent {
+		r.bit() // cabac_init_flag
+	}
+	if out.TemporalMVP {
+		// A P slice has only list 0 to take it from, and says nothing.
+		out.CollocatedFromL0 = true
+		if out.Type == SliceB {
+			out.CollocatedFromL0 = r.flag()
+		}
+		n := out.NumRefIdxL0Active
+		if !out.CollocatedFromL0 {
+			n = out.NumRefIdxL1Active
+		}
+		// ⛔ Stated only when there is a choice. A reader that always read it
+		// would consume a field that is not there.
+		if n > 1 {
+			out.CollocatedRefIdx = r.ue()
+			if r.err != nil {
+				return r.err
+			}
+			if out.CollocatedRefIdx >= n {
+				return fmt.Errorf("%w: a collocated picture at %d of %d",
+					ErrSliceHeader, out.CollocatedRefIdx, n)
+			}
+		}
+	}
+	if (pps.WeightedPred && out.Type == SliceP) ||
+		(pps.WeightedBipred && out.Type == SliceB) {
+		w, err := readPredWeights(r, sps, out)
+		if err != nil {
+			return err
+		}
+		out.Weights = w
+	}
+	five := r.ue()
+	if r.err != nil {
 		return r.err
 	}
-	width := ceilLog2(total)
-	if r.flag() { // ref_pic_list_modification_flag_l0
-		out.ListEntryL0 = readListEntries(r, width, int(out.NumRefIdxL0Active))
+	if five > 4 {
+		return fmt.Errorf("%w: five_minus_max_num_merge_cand of %d", ErrSliceHeader, five)
 	}
-	if out.Type == SliceB && r.flag() { // ref_pic_list_modification_flag_l1
-		out.ListEntryL1 = readListEntries(r, width, int(out.NumRefIdxL1Active))
-	}
-	return r.err
+	out.MaxMergeCand = 5 - uint8(five)
+	return nil
 }
 
 // readListEntries reads one list's entries, each as wide as the number of

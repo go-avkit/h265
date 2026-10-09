@@ -33,6 +33,37 @@ type sliceRefs struct {
 	// flag as zero, which is NOT the same as an empty one.
 	modL0 []uint32
 	modL1 []uint32
+
+	// sliceMVP writes slice_temporal_mvp_enabled_flag set, which brings the
+	// collocated fields with it. The sequence must enable it too.
+	sliceMVP bool
+	// collocFromL1 writes collocated_from_l0_flag as zero, and collocIdx the
+	// position, where the list has more than one entry to choose from.
+	collocFromL1 bool
+	collocIdx    uint32
+	// weights writes pred_weight_table. The picture parameter set must turn
+	// weighting on for the slice's kind.
+	weights *weightTable
+	// fiveMinusMerge is five_minus_max_num_merge_cand, 0 unless a test wants
+	// to state one the format does not allow.
+	fiveMinusMerge uint32
+}
+
+// weightTable is what a test wants pred_weight_table to say. Each list's
+// entries are stated as (luma stated, chroma stated); a nil list writes every
+// flag as zero.
+type weightTable struct {
+	lumaDenom   uint32
+	chromaDelta int32
+	l0, l1      []weightEntry
+}
+
+type weightEntry struct {
+	luma, chroma bool
+	dLuma        int32
+	lumaOffset   int32
+	dChroma      [2]int32
+	dChromaOff   [2]int32
 }
 
 func (s sliceRefs) kind() SliceType {
@@ -131,7 +162,7 @@ func sliceRefUnit(t *testing.T, sps SPS, pps PPS, lsb uint32, refs sliceRefs) Un
 // package reads.
 func writeSliceLists(w *bitbuf, sps SPS, pps PPS, refs sliceRefs) {
 	if sps.TemporalMVPEnabled {
-		w.bit(0) // slice_temporal_mvp_enabled_flag
+		w.flag(refs.sliceMVP) // slice_temporal_mvp_enabled_flag
 	}
 	if sps.SAOEnabled {
 		w.bit(0) // slice_sao_luma_flag
@@ -156,10 +187,10 @@ func writeSliceLists(w *bitbuf, sps SPS, pps PPS, refs sliceRefs) {
 		w.bit(0)
 	}
 	total := refsTotalCurr(sps, refs)
-	if !pps.ListsModification || total <= 1 {
-		return
+	width := 0
+	if total > 0 {
+		width = ceilLog2(total)
 	}
-	width := ceilLog2(total)
 	writeOne := func(entries []uint32, n uint32) {
 		if entries == nil {
 			w.bit(0)
@@ -174,9 +205,89 @@ func writeSliceLists(w *bitbuf, sps SPS, pps PPS, refs sliceRefs) {
 			w.bits(v, width)
 		}
 	}
-	writeOne(refs.modL0, l0)
+	if pps.ListsModification && total > 1 {
+		writeOne(refs.modL0, l0)
+		if kind == SliceB {
+			writeOne(refs.modL1, l1)
+		}
+	}
+	writeSlicePrediction(w, sps, pps, refs, kind, l0, l1)
+}
+
+func writeSlicePrediction(w *bitbuf, sps SPS, pps PPS, refs sliceRefs, kind SliceType, l0, l1 uint32) {
 	if kind == SliceB {
-		writeOne(refs.modL1, l1)
+		w.bit(0) // mvd_l1_zero_flag
+	}
+	if pps.CABACInitPresent {
+		w.bit(0) // cabac_init_flag
+	}
+	if refs.sliceMVP && sps.TemporalMVPEnabled {
+		n := l0
+		if kind == SliceB {
+			w.bit(boolBit(!refs.collocFromL1)) // collocated_from_l0_flag
+			if refs.collocFromL1 {
+				n = l1
+			}
+		}
+		if n > 1 {
+			w.ue(refs.collocIdx)
+		}
+	}
+	if (pps.WeightedPred && kind == SliceP) || (pps.WeightedBipred && kind == SliceB) {
+		writeWeightTable(w, sps, refs, kind, l0, l1)
+	}
+	w.ue(refs.fiveMinusMerge)
+}
+
+func writeWeightTable(w *bitbuf, sps SPS, refs sliceRefs, kind SliceType, l0, l1 uint32) {
+	tbl := refs.weights
+	if tbl == nil {
+		tbl = &weightTable{}
+	}
+	chroma := !sps.SeparatePlanes && sps.ChromaFormat != 0
+	w.ue(tbl.lumaDenom)
+	if chroma {
+		w.se(tbl.chromaDelta)
+	}
+	one := func(es []weightEntry, n uint32) {
+		// ⛔ Every luma flag first, as ONE field of n bits, then every chroma
+		// flag, and only then the values.
+		var luma, chromaBits uint32
+		for i := uint32(0); i < n; i++ {
+			bit := uint32(1) << (n - 1 - i)
+			if int(i) < len(es) {
+				if es[i].luma {
+					luma |= bit
+				}
+				if es[i].chroma {
+					chromaBits |= bit
+				}
+			}
+		}
+		w.bits(luma, int(n))
+		if chroma {
+			w.bits(chromaBits, int(n))
+		}
+		for i := uint32(0); i < n; i++ {
+			if int(i) >= len(es) {
+				continue
+			}
+			e := es[i]
+			if e.luma {
+				w.se(e.dLuma)
+				w.se(e.lumaOffset)
+			}
+			if chroma && e.chroma {
+				for j := 0; j < 2; j++ {
+					w.se(e.dChroma[j])
+					w.se(e.dChromaOff[j])
+				}
+			}
+		}
+	}
+	one(tbl.l0, l0)
+	if kind == SliceB {
+		one(tbl.l1, l1)
 	}
 }
 

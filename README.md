@@ -31,6 +31,7 @@ picture boundaries, or hand slices to something that does decode.
 | `ReferencesOf`, `PictureRefs`, `LongTermRef` | what one coded picture says it still needs |
 | `Derive`, `RefPicSet`, `LtPicture` | the pictures a decoder must keep for it, clause 8.3.2 |
 | `Lists`, `RefListEntry` | the two lists a slice predicts from, clause 8.3.4, in the order the slice asked for |
+| `PredWeights`, `RefWeight` | how a slice weighs each picture, 7.3.6.3 |
 | `ShortHeaderError` | a unit that ended inside the syntax, said as such |
 
 ⛔ **HEVC's slice types are not H.264's.** Here `B` is 0, `P` is 1 and `I` is 2 —
@@ -163,8 +164,36 @@ An entry is `Ceil(Log2(NumPicTotalCurr))` bits wide, which holds values past the
 last picture -- three pictures are named in two bits -- so an index out of range
 is reachable from a field of conformant width. `Lists` refuses it.
 
-**Not here:** `pred_weight_table()`, `collocated_ref_idx`, and the fields after
-them. `ReferencesOf` stops once it has the lists.
+### How a slice weighs what it predicts from
+
+`pred_weight_table()`, 7.3.6.3, comes back as `PictureRefs.Weights` -- nil where
+the picture parameter set does not weight this kind of slice.
+
+⛔ **The weights are VALUES, not the differences the syntax carries.** A weight
+is stated as a difference from the neutral `1 << denominator`, and a chroma
+offset as a difference that still has the weight folded into it. Handed the raw
+numbers, a decoder scales by something close to nothing.
+
+```
+ChromaOffset = Clip(delta - ((128 * ChromaWeight) >> denom) + 128, -128, 127)
+```
+
+⛔ **Every luma flag comes first, as one field of n bits, then every chroma
+flag, and only then the values.** H.264 interleaves a flag with its own values;
+HEVC does not. A reader carrying the sibling's shape over takes the first
+entry's weight out of the second entry's flag -- a wrong number, not an error.
+
+An entry that states nothing still comes back with the neutral weight and a zero
+offset, so a caller never has to ask whether a field was present.
+
+The chroma fields follow **`ChromaArrayType`**, as the SAO flag does.
+
+`TemporalMVP`, `CollocatedFromL0` and `CollocatedRefIdx` say which picture the
+slice takes its motion from, and `MaxMergeCand` how many merge candidates it
+uses. The index is stated only where the list has more than one entry.
+
+**Not here:** `slice_qp_delta` and the fields after it. `ReferencesOf` stops
+once it has everything about the pictures.
 
 A picture may be carried by several slice segments, and only the one with
 `first_slice_segment_in_pic_flag` set begins a new picture. That is what

@@ -219,6 +219,16 @@ func (w *bitbuf) bits(v uint32, n int) {
 	}
 }
 
+func (w *bitbuf) se(v int32) {
+	if v > 0 {
+		w.ue(uint32(v)*2 - 1)
+		return
+	}
+	w.ue(uint32(-v) * 2)
+}
+
+func (w *bitbuf) flag(b bool) { w.bit(boolBit(b)) }
+
 func (w *bitbuf) ue(v uint32) {
 	v++
 	n := 0
