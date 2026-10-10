@@ -34,10 +34,27 @@ type ShortTermRPS struct {
 // set may predict from.
 func (s ShortTermRPS) Count() int { return len(s.Before) + len(s.After) }
 
-// maxRefPics bounds a set. A conforming stream states at most sixteen, and a
-// bound is wanted here because the counts are read from the stream before
-// anything is allocated for them.
-const maxRefPics = 16
+// maxLongTermPics bounds how many long-term pictures a sequence or a slice may
+// name, from libde265's MAX_NUM_LT_REF_PICS_SPS. The counts are read from the
+// stream before anything is allocated for them.
+//
+// ⛔ It used to be maxRefPics, "bounds a set", used BOTH for the short-term
+// halves and -- doubled -- for the long-term count. The short-term bound is now
+// maxDeltaPocs and sits on the sum, so this name says the one thing it does.
+const maxLongTermPics = 32
+
+// maxDeltaPocs bounds a set's TWO halves TOGETHER.
+//
+// ⛔ 7.4.8 bounds num_negative_pics by sps_max_dec_pic_buffering_minus1 and
+// num_positive_pics by what is LEFT of it, so the ceiling is on the sum, not
+// on each half. Bounding them one at a time allowed twice what any stream may
+// state. sps_max_dec_pic_buffering_minus1 is at most MaxDpbSize - 1, and A.4.2
+// puts MaxDpbSize at sixteen whatever the level, so fifteen is the ceiling for
+// every stream -- which is what this package can say without keeping the
+// sequence's own value, skipped with the rest of the sub-layer ordering.
+//
+// gstreamer bounds NumDeltaPocs at MAX_DPB_SIZE - 1 for the same reason.
+const maxDeltaPocs = 15
 
 // maxShortTermRPS is how many sets a sequence parameter set may carry, from
 // 7.4.3.2.1.
@@ -132,8 +149,9 @@ func parseShortTermRPS(r *sticky, idx int, prior []ShortTermRPS, inSliceHeader b
 			out.After = append(out.After, RefPic{d, used[len(from.Before)+j]})
 		}
 	}
-	if len(out.Before) > maxRefPics || len(out.After) > maxRefPics {
-		return ShortTermRPS{}, fmt.Errorf("%w: a predicted set of %d pictures", ErrUnsupportedSPS, out.Count())
+	if out.Count() > maxDeltaPocs {
+		return ShortTermRPS{}, fmt.Errorf("%w: a predicted set of %d pictures, at most %d",
+			ErrUnsupportedSPS, out.Count(), maxDeltaPocs)
 	}
 	return out, nil
 }
@@ -145,8 +163,11 @@ func parseShortTermRPSExplicit(r *sticky) (ShortTermRPS, error) {
 	if r.err != nil {
 		return out, r.err
 	}
-	if nNeg > maxRefPics || nPos > maxRefPics {
-		return out, fmt.Errorf("%w: a set of %d before and %d after", ErrUnsupportedSPS, nNeg, nPos)
+	// ⛔ On the SUM. Each half within the ceiling says nothing about the two
+	// together, and the format bounds the second by what the first left.
+	if uint64(nNeg)+uint64(nPos) > maxDeltaPocs {
+		return out, fmt.Errorf("%w: a set of %d before and %d after, at most %d together",
+			ErrUnsupportedSPS, nNeg, nPos, maxDeltaPocs)
 	}
 	// The deltas are stated as gaps from the previous entry, so each is read
 	// against a running total rather than on its own.

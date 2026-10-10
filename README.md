@@ -221,6 +221,17 @@ A picture may be carried by several slice segments, and only the one with
 `SplitPictures` counts, which is how a stream's pictures are counted without
 decoding any of them.
 
+## A ceiling on the sum, not on each half
+
+⛔ **7.4.8 bounds `num_negative_pics` by `sps_max_dec_pic_buffering_minus1` and
+`num_positive_pics` by what is LEFT of it**, so the ceiling is on the sum. A
+bound on each half allows twice what any conforming stream may state: eight
+before and eight after is well inside sixteen each way and outside the format.
+
+The ceiling is fifteen — `sps_max_dec_pic_buffering_minus1` is at most
+`MaxDpbSize - 1`, and A.4.2 puts `MaxDpbSize` at sixteen whatever the level.
+GStreamer bounds `NumDeltaPocs` the same way.
+
 ## A width is read before it is narrowed
 
 ⛔ **`log2_max_pic_order_cnt_lsb_minus4` is a BIT COUNT** — a slice header reads
