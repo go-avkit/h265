@@ -240,7 +240,7 @@ func (s *SPS) readLongTermRefPics(r *sticky) {
 	}
 	s.LongTermRefPicsPresent = true
 	n := r.ue()
-	if r.err != nil || n > maxRefPics*2 {
+	if r.err != nil || n > maxLongTermPics {
 		return
 	}
 	for i := uint32(0); i < n; i++ {

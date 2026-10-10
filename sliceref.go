@@ -337,7 +337,7 @@ func readSliceLongTerm(r *sticky, sps SPS, out *PictureRefs) error {
 		return fmt.Errorf("%w: a slice names %d of the sequence's %d long-term pictures",
 			ErrSliceHeader, fromSPS, len(sps.LongTermRefPics))
 	}
-	if total := uint64(fromSPS) + uint64(stated); total > maxRefPics*2 {
+	if total := uint64(fromSPS) + uint64(stated); total > maxLongTermPics {
 		return fmt.Errorf("%w: %d long-term pictures", ErrSliceHeader, total)
 	}
 	for i := uint32(0); i < fromSPS+stated; i++ {
