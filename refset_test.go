@@ -3,7 +3,10 @@
 
 package h265
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func deltas(e []RefPic) []int32 {
 	out := make([]int32, len(e))
@@ -434,4 +437,42 @@ func TestEntriesCrossZeroBetweenTheHalves(t *testing.T) {
 			t.Errorf("after = %v; want nothing left ahead", deltas(got.After))
 		}
 	})
+}
+
+// TestASumBoundedOnlyTermByTerm.
+//
+// ⛔ 7.4.8 bounds num_negative_pics by sps_max_dec_pic_buffering_minus1 and
+// num_positive_pics by what is LEFT of it, so the ceiling is on the SUM. This
+// bounded each half on its own at sixteen, which allowed thirty-two -- twice
+// what any conforming stream may state. gstreamer bounds NumDeltaPocs at
+// MAX_DPB_SIZE - 1 for the same reason.
+func TestASumBoundedOnlyTermByTerm(t *testing.T) {
+	gaps := func(n int) []refGap {
+		out := make([]refGap, n)
+		for i := range out {
+			out[i] = refGap{1, true}
+		}
+		return out
+	}
+	for _, c := range []struct {
+		neg, pos int
+		refuse   bool
+	}{
+		{15, 0, false}, // the ceiling, in one half
+		{0, 15, false},
+		{8, 7, false}, // and split across the two
+		{8, 8, true},  // ⛔ each half well inside sixteen, the sum is not
+		{16, 0, true},
+		{16, 16, true}, // what the old form allowed
+	} {
+		u := set{subLayers: 1, chroma: 1, width: 64, height: 64,
+			stRPS: [][2][]refGap{{gaps(c.neg), gaps(c.pos)}}}.build()
+		_, err := ParseSPS(u)
+		switch {
+		case c.refuse && !errors.Is(err, ErrUnsupportedSPS):
+			t.Errorf("%d before and %d after: err = %v, want ErrUnsupportedSPS", c.neg, c.pos, err)
+		case !c.refuse && err != nil:
+			t.Errorf("%d before and %d after was refused: %v", c.neg, c.pos, err)
+		}
+	}
 }
