@@ -67,14 +67,21 @@ const maxShortTermRPS = 64
 // one rather than listed outright, and the difference cannot be applied -- nor
 // even its bits counted -- without the set it is a difference from.
 //
-// inSliceHeader changes two things. A slice's own set always states whether it
-// is predicted, where the first set of a sequence cannot be; and it says how
-// far back to look rather than always meaning the set before, because it comes
-// after every set the sequence carries rather than among them.
+// inSliceHeader changes one thing: a slice's own set says how far back to look
+// rather than always meaning the set before, because it comes after every set
+// the sequence carries rather than among them.
+//
+// ⛔ Whether a set is predicted is stated only when idx is not zero, in a slice
+// header as anywhere else (7.3.7: "if( stRpsIdx != 0 )"). A slice's own set has
+// idx num_short_term_ref_pic_sets, so a sequence carrying NO set -- what x265
+// writes by default -- has slices whose own set states no such flag. Reading
+// one there anyway took the first bit of num_negative_pics, and every field
+// after it was misread: a P slice at POC 3 predicting from POC 0 came out as
+// predicting from POC 4.
 func parseShortTermRPS(r *sticky, idx int, prior []ShortTermRPS, inSliceHeader bool) (ShortTermRPS, error) {
 	var out ShortTermRPS
 	predict := false
-	if idx != 0 || inSliceHeader {
+	if idx != 0 {
 		predict = r.flag()
 	}
 	if !predict {
