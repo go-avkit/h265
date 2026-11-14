@@ -1,5 +1,11 @@
 # h265
 
+[![ci](https://github.com/go-avkit/h265/actions/workflows/ci.yml/badge.svg)](https://github.com/go-avkit/h265/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/go-avkit/h265.svg)](https://pkg.go.dev/github.com/go-avkit/h265)
+[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
+
+Part of [go-avkit](https://go-avkit.github.io): [documentation](https://go-avkit.github.io/docs/).
+
 Pure-Go (CGO=0) reader for the H.265/HEVC bitstream: the NAL layer, the
 parameter sets, the slice segment header, and the boundaries between coded
 pictures.
