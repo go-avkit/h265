@@ -75,6 +75,8 @@ type PPS struct {
 	LoopFilterAcrossTiles              bool
 	LoopFilterAcrossSlices             bool
 	ScalingListPresent                 bool
+	// ScalingList is pps_scaling_list_data( ), nil without it.
+	ScalingList *ScalingLists
 	// Log2ParMrgLevel is Log2ParMrgLevel (7-37): log2_parallel_merge_level_minus2 + 2.
 	Log2ParMrgLevel uint8
 	// Range is pps_range_extension; its zero value is what an absent one infers.
@@ -199,7 +201,11 @@ func ParsePPS(u Unit) (PPS, error) {
 		}
 	}
 	if p.ScalingListPresent = r.flag(); p.ScalingListPresent { // pps_scaling_list_data_present_flag
-		skipScalingListData(r)
+		lists, err := readScalingListData(r)
+		if err != nil {
+			return PPS{}, err
+		}
+		p.ScalingList = lists
 	}
 	p.ListsModification = r.flag()
 	merge := r.ue() // log2_parallel_merge_level_minus2: at most CtbLog2SizeY - 2, 4
@@ -339,38 +345,4 @@ func (p *PPS) readExtensions(r *sticky) (extData bool, err error) {
 	}
 	x.Log2SAOOffsetScaleLuma, x.Log2SAOOffsetScaleChroma = uint8(luma), uint8(chroma)
 	return extData, nil
-}
-
-// skipScalingListData consumes the scaling lists a set may carry.
-//
-// ⛔ Four size classes. The first three state six matrices each and the largest
-// states two, and a list is either predicted from another -- one number -- or given
-// outright, as sixteen coefficients for the smallest class and sixty-four for the
-// rest, preceded by a direct-current term for the two largest. Reading the wrong
-// count for any of them leaves the rest of the set misaligned, and the set has no
-// field that would show it.
-func skipScalingListData(r *sticky) {
-	for sizeID := 0; sizeID < 4; sizeID++ {
-		step := 1
-		if sizeID == 3 {
-			// The largest class states two matrices rather than six.
-			step = 3
-		}
-		for matrixID := 0; matrixID < 6; matrixID += step {
-			if !r.flag() { // scaling_list_pred_mode_flag
-				r.ue() // which earlier list this one copies
-				continue
-			}
-			if sizeID > 1 {
-				r.se() // scaling_list_dc_coef_minus8
-			}
-			n := 64
-			if sizeID == 0 {
-				n = 16
-			}
-			for i := 0; i < n; i++ {
-				r.se()
-			}
-		}
-	}
 }

@@ -68,8 +68,11 @@ type SPS struct {
 	// transform tree below a coding unit.
 	MaxTransformHierarchyDepthInter, MaxTransformHierarchyDepthIntra uint8
 	ScalingListEnabled                                               bool
-	AMPEnabled                                                       bool
-	StrongIntraSmoothing                                             bool
+	// ScalingList is sps_scaling_list_data( ), nil when the SPS states none (the
+	// default lists then apply if ScalingListEnabled).
+	ScalingList          *ScalingLists
+	AMPEnabled           bool
+	StrongIntraSmoothing bool
 	// PCM is the pcm_enabled_flag group; its sample bit depths are in bits.
 	PCM struct {
 		Enabled                      bool
@@ -205,7 +208,11 @@ func ParseSPS(u Unit) (SPS, error) {
 		if r.flag() { // sps_scaling_list_data_present_flag
 			// The same structure the picture parameter set carries, and the
 			// same reader: a second copy would be a second thing to drift.
-			skipScalingListData(r)
+			lists, err := readScalingListData(r)
+			if err != nil {
+				return s, err
+			}
+			s.ScalingList = lists
 		}
 	}
 	s.AMPEnabled = r.flag()
