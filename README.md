@@ -24,6 +24,10 @@ no prediction and no deblocking — nothing here turns a bitstream into pixels. 
 reads the syntax a caller needs in order to describe a track, cut a stream on
 picture boundaries, or hand slices to something that does decode.
 
+A decoder built on this reader is being designed, not yet written:
+[docs/design/hevc.md](docs/design/hevc.md) (profile of the decoder it would
+replace, stages, kernels, conformance, target).
+
 ## What is in it
 
 | | |

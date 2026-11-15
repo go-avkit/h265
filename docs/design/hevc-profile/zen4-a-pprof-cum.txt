@@ -1,0 +1,99 @@
+File: jvt-linux
+Build ID: d875698944354beeabef6946f33ad9a4c36bdf17
+Type: cpu
+Time: 2026-11-15 17:24:51 CET
+Duration: 15.52s, Total samples = 12.46s (80.29%)
+Showing nodes accounting for 11.29s, 90.61% of 12.46s total
+Dropped 109 nodes (cum <= 0.06s)
+Showing top 90 nodes out of 93
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     12.39s 99.44%  github.com/spf13/cobra.(*Command).Execute (inline)
+         0     0%     0%     12.39s 99.44%  github.com/spf13/cobra.(*Command).ExecuteC
+         0     0%     0%     12.39s 99.44%  github.com/spf13/cobra.(*Command).execute
+         0     0%     0%     12.39s 99.44%  main.benchCmd.func1
+         0     0%     0%     12.39s 99.44%  main.main
+         0     0%     0%     12.39s 99.44%  main.oursRun
+         0     0%     0%     12.39s 99.44%  main.oursRun.func1
+         0     0%     0%     12.39s 99.44%  main.runBench
+         0     0%     0%     12.39s 99.44%  runtime.main
+         0     0%     0%     12.37s 99.28%  github.com/go-avkit/decode.(*Decoder).DecodeAnnexB
+         0     0%     0%     12.37s 99.28%  github.com/go-avkit/decode.(*Decoder).hevcAnnexB
+         0     0%     0%     12.37s 99.28%  github.com/go-avkit/decode.(*Decoder).hevcNALs
+         0     0%     0%     11.84s 95.02%  github.com/gen2brain/h265/hevc.(*Decoder).DecodeNAL
+         0     0%     0%     11.84s 95.02%  github.com/gen2brain/h265/hevc.(*Decoder).decodeSlice
+         0     0%     0%      7.33s 58.83%  github.com/gen2brain/h265/hevc.(*Decoder).finishPicture
+         0     0%     0%      7.25s 58.19%  github.com/gen2brain/h265/hevc.(*ctuDecoder).overRows
+         0     0%     0%      5.75s 46.15%  github.com/gen2brain/h265/hevc.(*ctuDecoder).applySAO
+         0     0%     0%      5.75s 46.15%  github.com/gen2brain/h265/hevc.saoPlane[go.shape.uint8]
+     0.69s  5.54%  5.54%      5.69s 45.67%  github.com/gen2brain/h265/hevc.saoPlane[go.shape.uint8].func1
+     0.01s  0.08%  5.62%      4.39s 35.23%  github.com/gen2brain/h265/hevc.(*ctuDecoder).decodeSliceData
+         0     0%  5.62%      4.37s 35.07%  github.com/gen2brain/h265/hevc.(*ctuDecoder).codingTreeUnit
+     0.02s  0.16%  5.78%      4.36s 34.99%  github.com/gen2brain/h265/hevc.(*ctuDecoder).codingQuadtree
+     0.01s  0.08%  5.86%      4.32s 34.67%  github.com/gen2brain/h265/hevc.(*ctuDecoder).codingUnit
+     0.01s  0.08%  5.94%      4.26s 34.19%  github.com/gen2brain/h265/hevc.(*ctuDecoder).codingUnitData
+     2.80s 22.47% 28.41%      3.51s 28.17%  github.com/gen2brain/h265/hevc.saoEdgeRow[go.shape.uint8]
+     0.01s  0.08% 28.49%      3.14s 25.20%  github.com/gen2brain/h265/hevc.(*ctuDecoder).predictionUnit
+     0.16s  1.28% 29.78%      2.67s 21.43%  github.com/gen2brain/h265/hevc.(*ctuDecoder).motionCompensate
+         0     0% 29.78%      1.68s 13.48%  github.com/gen2brain/h265/hevc.(*ctuDecoder).interCU
+         0     0% 29.78%      1.56s 12.52%  github.com/gen2brain/h265/hevc.(*ctuDecoder).deblock
+     0.03s  0.24% 30.02%      1.56s 12.52%  github.com/gen2brain/h265/hevc.(*ctuDecoder).deblock.func1
+     0.47s  3.77% 33.79%      1.53s 12.28%  github.com/gen2brain/h265/hevc.(*ctuDecoder).deblockEdge
+         0     0% 33.79%      1.43s 11.48%  github.com/gen2brain/h265/hevc.(*ctuDecoder).combine
+         0     0% 33.79%      1.43s 11.48%  github.com/gen2brain/h265/hevc.combineInto[go.shape.uint8]
+     1.21s  9.71% 43.50%      1.32s 10.59%  github.com/gen2brain/h265/hevc.weightUni[go.shape.uint8]
+     0.22s  1.77% 45.26%      1.07s  8.59%  github.com/gen2brain/h265/hevc.saoSample[go.shape.uint8]
+     1.05s  8.43% 53.69%      1.07s  8.59%  github.com/gen2brain/h265/hevc.sign (inline)
+         0     0% 53.69%      0.94s  7.54%  github.com/gen2brain/h265/hevc.(*ctuDecoder).transformTree
+     0.01s  0.08% 53.77%      0.94s  7.54%  github.com/gen2brain/h265/hevc.(*ctuDecoder).transformUnit
+         0     0% 53.77%      0.90s  7.22%  github.com/gen2brain/h265/hevc.(*ctuDecoder).reconstruct
+     0.01s  0.08% 53.85%      0.90s  7.22%  github.com/gen2brain/h265/hevc.reconstructPlane[go.shape.uint8]
+     0.01s  0.08% 53.93%      0.64s  5.14%  github.com/gen2brain/h265/hevc.mcLuma[go.shape.uint8]
+         0     0% 53.93%      0.53s  4.25%  github.com/go-avkit/decode.(*Decoder).hevcFrame
+         0     0% 53.93%      0.53s  4.25%  github.com/go-avkit/decode.(*Decoder).hevcFrames
+     0.47s  3.77% 57.70%      0.47s  3.77%  runtime.memmove
+     0.23s  1.85% 59.55%      0.45s  3.61%  github.com/gen2brain/h265/hevc.decodeResidual
+     0.03s  0.24% 59.79%      0.45s  3.61%  github.com/gen2brain/h265/hevc.dspInit.func14
+     0.10s   0.8% 60.59%      0.44s  3.53%  github.com/gen2brain/h265/hevc.mcChroma[go.shape.uint8]
+         0     0% 60.59%      0.41s  3.29%  github.com/go-avkit/decode.cropPlane8 (inline)
+     0.32s  2.57% 63.16%      0.32s  2.57%  github.com/gen2brain/h265/hevc.saoPlane[go.shape.uint8].func1.1 (inline)
+     0.13s  1.04% 64.21%      0.30s  2.41%  github.com/gen2brain/h265/hevc.(*ctuDecoder).boundaryStrength
+     0.30s  2.41% 66.61%      0.30s  2.41%  github.com/gen2brain/h265/hevc.mcTap8AVX2
+         0     0% 66.61%      0.28s  2.25%  github.com/gen2brain/h265/hevc.dspInit.func17
+     0.01s  0.08% 66.69%      0.27s  2.17%  github.com/gen2brain/h265/hevc.inverseTransform
+     0.26s  2.09% 68.78%      0.26s  2.09%  github.com/gen2brain/h265/hevc.(*ctuDecoder).tbIndex (inline)
+     0.25s  2.01% 70.79%      0.25s  2.01%  github.com/gen2brain/h265/hevc.clip3 (inline)
+     0.08s  0.64% 71.43%      0.25s  2.01%  github.com/gen2brain/h265/hevc.deblockLumaEdge[go.shape.uint8]
+     0.07s  0.56% 71.99%      0.24s  1.93%  github.com/gen2brain/h265/hevc.deblockLumaPlan[go.shape.uint8]
+     0.24s  1.93% 73.92%      0.24s  1.93%  github.com/gen2brain/h265/hevc.mcCopy8AVX512
+     0.24s  1.93% 75.84%      0.24s  1.93%  runtime.memclrNoHeapPointers
+         0     0% 75.84%      0.23s  1.85%  github.com/gen2brain/h265/hevc.dspInit.func15
+     0.01s  0.08% 75.92%      0.23s  1.85%  github.com/gen2brain/h265/hevc.dspInit.func3
+     0.06s  0.48% 76.40%      0.22s  1.77%  github.com/gen2brain/h265/hevc.(*ctuDecoder).saoNeighbour (inline)
+     0.22s  1.77% 78.17%      0.22s  1.77%  github.com/gen2brain/h265/hevc.idctCols8AVX2
+     0.17s  1.36% 79.53%      0.20s  1.61%  github.com/gen2brain/h265/hevc.(*cabac).decodeBin
+     0.17s  1.36% 80.90%      0.17s  1.36%  github.com/gen2brain/h265/hevc.(*ctuDecoder).filterEdge
+     0.14s  1.12% 82.02%      0.15s  1.20%  github.com/gen2brain/h265/hevc.(*ctuDecoder).sliceAt (inline)
+     0.03s  0.24% 82.26%      0.15s  1.20%  github.com/gen2brain/h265/hevc.deblockLumaPlan[go.shape.uint8].func2
+     0.14s  1.12% 83.39%      0.14s  1.12%  github.com/gen2brain/h265/hevc.mcTapV16x8AVX2
+     0.13s  1.04% 84.43%      0.13s  1.04%  github.com/gen2brain/h265/hevc.(*ctuDecoder).setMV
+         0     0% 84.43%      0.13s  1.04%  github.com/gen2brain/h265/hevc.deblockLuma8
+     0.08s  0.64% 85.07%      0.13s  1.04%  github.com/gen2brain/h265/hevc.differentMotion
+     0.03s  0.24% 85.31%      0.13s  1.04%  github.com/gen2brain/h265/hevc.mergeCandidates
+         0     0% 85.31%      0.12s  0.96%  github.com/gen2brain/h265/hevc.(*ctuDecoder).chromaTBs
+     0.12s  0.96% 86.28%      0.12s  0.96%  github.com/gen2brain/h265/hevc.mcTap4AVX2
+         0     0% 86.28%      0.12s  0.96%  runtime.makeslice
+         0     0% 86.28%      0.12s  0.96%  runtime.mallocgc
+         0     0% 86.28%      0.11s  0.88%  github.com/gen2brain/h265/hevc.combinePred[go.shape.uint8]
+         0     0% 86.28%      0.11s  0.88%  github.com/gen2brain/h265/hevc.newPicture
+         0     0% 86.28%      0.11s  0.88%  runtime.mallocgcLarge
+         0     0% 86.28%      0.11s  0.88%  runtime.memclrNoHeapPointersChunked
+     0.10s   0.8% 87.08%      0.10s   0.8%  github.com/gen2brain/h265/hevc.deblockLumaPlan[go.shape.uint8].func1
+     0.09s  0.72% 87.80%      0.09s  0.72%  github.com/gen2brain/h265/hevc.fill[go.shape.bool]
+     0.09s  0.72% 88.52%      0.09s  0.72%  github.com/gen2brain/h265/hevc.mcTapV16x4AVX2
+     0.07s  0.56% 89.09%      0.08s  0.64%  github.com/gen2brain/h265/hevc.(*ctuDecoder).markPU
+     0.04s  0.32% 89.41%      0.08s  0.64%  github.com/gen2brain/h265/hevc.decodeSubBlockLevels
+     0.03s  0.24% 89.65%      0.08s  0.64%  github.com/gen2brain/h265/hevc.gatherRef[go.shape.uint8]
+     0.03s  0.24% 89.89%      0.07s  0.56%  github.com/gen2brain/h265/hevc.(*ctuDecoder).available
+     0.07s  0.56% 90.45%      0.07s  0.56%  github.com/gen2brain/h265/hevc.(*ctuDecoder).deblockChromaEdge
+         0     0% 90.45%      0.07s  0.56%  github.com/gen2brain/h265/hevc.(*ctuDecoder).temporalMV
+     0.02s  0.16% 90.61%      0.07s  0.56%  github.com/gen2brain/h265/hevc.(*ctuDecoder).temporalMerge

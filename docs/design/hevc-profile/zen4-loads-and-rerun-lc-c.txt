@@ -1,0 +1,40 @@
+# Zen 4 host loads. jvt bench (decode#13) reads a comma-decimal uptime ("0,10")
+# as its integer part, so the loads printed in zen4-a/b/c-*.txt (0.00, 1.00)
+# are wrong. Below: (1) the host's own uptime output read just before the first
+# profiled runs, in its comma locale, transcribed; (2) a re-run of the same
+# three clips, 3 rounds each, with LC_ALL=C so the harness reads the load
+# correctly, uptime (LC_ALL=C) before each clip and at the end. No profile in (2).
+
+## (1) uptime, comma locale, 2026-11-15
+ 17:24:41 up 64 days,  3:20,  5 users,  load average: 0,10, 0,44, 0,45   (before clips a and b)
+ 17:28:11 up 64 days,  3:23,  5 users,  load average: 0,46, 0,60, 0,52   (before clip c)
+
+## (2) LC_ALL=C re-run, taskset -c 4, 2026-11-15
+ 18:06:45 up 64 days,  4:02,  6 users,  load average: 0.74, 0.84, 0.54
+round 1 a.265 load 0.74: ours 89.2 fps, ffmpeg 440.4 fps
+round 2 a.265 load 0.76: ours 98.1 fps, ffmpeg 436.4 fps
+round 3 a.265 load 0.76: ours 97.1 fps, ffmpeg 417.4 fps
+| input | frames ours/ffmpeg | rounds | ours fps med (min-max) | ffmpeg fps med (min-max) | ratio ours/ffmpeg | CPU ratio | allocs/frame | KiB/frame |
+|---|---|---|---|---|---|---|---|---|
+| a.265 | 240/240 | 3/3 | 97.1 (89.2-98.1) | 436.4 (417.4-440.4) | 0.22 | 0.22 | 2454.0 | 3328 |
+
+1-minute load before each run: min 0.74, median 0.76, max 0.76 (3 samples)
+ 18:06:54 up 64 days,  4:02,  6 users,  load average: 0.78, 0.84, 0.54
+round 1 b.265 load 0.78: ours 6.2 fps, ffmpeg 50.8 fps
+round 2 b.265 load 1.13: ours 6.3 fps, ffmpeg 51.2 fps
+round 3 b.265 load 1.38: ours 6.3 fps, ffmpeg 51.2 fps
+| input | frames ours/ffmpeg | rounds | ours fps med (min-max) | ffmpeg fps med (min-max) | ratio ours/ffmpeg | CPU ratio | allocs/frame | KiB/frame |
+|---|---|---|---|---|---|---|---|---|
+| b.265 | 120/120 | 3/3 | 6.3 (6.2-6.3) | 51.2 (50.8-51.2) | 0.12 | 0.12 | 29.7 | 19284 |
+
+1-minute load before each run: min 0.78, median 1.13, max 1.38 (3 samples)
+ 18:07:59 up 64 days,  4:03,  6 users,  load average: 1.66, 1.09, 0.65
+round 1 c.265 load 1.66: ours 7.9 fps, ffmpeg 32.9 fps
+round 2 c.265 load 1.58: ours 8.1 fps, ffmpeg 33.1 fps
+round 3 c.265 load 1.53: ours 8.1 fps, ffmpeg 33.1 fps
+| input | frames ours/ffmpeg | rounds | ours fps med (min-max) | ffmpeg fps med (min-max) | ratio ours/ffmpeg | CPU ratio | allocs/frame | KiB/frame |
+|---|---|---|---|---|---|---|---|---|
+| c.265 | 96/96 | 3/3 | 8.1 (7.9-8.1) | 33.1 (32.9-33.1) | 0.24 | 0.24 | 30.2 | 19793 |
+
+1-minute load before each run: min 1.53, median 1.58, max 1.66 (3 samples)
+ 18:08:44 up 64 days,  4:04,  5 users,  load average: 1.41, 1.11, 0.68
