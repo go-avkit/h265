@@ -94,6 +94,8 @@ type set struct {
 	// difference it can state is +1, which shifts every entry by one and moves
 	// across zero any entry that crosses it.
 	predictLast bool
+	// spsID is sps_seq_parameter_set_id.
+	spsID uint32
 	// longTerm writes that many long-term pictures.
 	longTerm int
 	// pocLSBMinus4 overrides log2_max_pic_order_cnt_lsb_minus4, so a test can
@@ -111,6 +113,17 @@ type set struct {
 	// true by accident, with nothing asserting it.
 	sao         bool
 	temporalMVP bool
+	// sizes overrides the six block-size and depth fields (log2_min_luma_coding_
+	// block_size_minus3 to max_transform_hierarchy_depth_intra), in order.
+	sizes []uint32
+	// pcmFields overrides the four PCM fields that follow pcm_enabled_flag
+	// (luma and chroma bit depths minus 1, then the two block-size fields).
+	pcmFields []uint32
+	// vui writes vui_parameters( ) after the flag that announces it.
+	vui func(w *writer)
+	// ext writes what follows sps_extension_present_flag: the four extension
+	// flags, sps_extension_4bits, and the extensions.
+	ext func(w *writer)
 }
 
 // refGap is one entry of a set a test writes: the gap from the previous entry,
@@ -148,7 +161,7 @@ func (s set) build() Unit {
 			w.bits(90, 8) // sub_layer_level_idc
 		}
 	}
-	w.ue(0) // sps_seq_parameter_set_id
+	w.ue(s.spsID) // sps_seq_parameter_set_id
 	w.ue(s.chroma)
 	if s.chroma == 3 {
 		if s.separatePlanes {
@@ -185,12 +198,13 @@ func (s set) buildTail(w *writer) {
 	w.ue(1)  // sps_max_dec_pic_buffering_minus1, for the highest sub-layer only
 	w.ue(0)  // sps_max_num_reorder_pics
 	w.ue(0)  // sps_max_latency_increase_plus1
-	w.ue(0)  // log2_min_luma_coding_block_size_minus3
-	w.ue(1)  // log2_diff_max_min_luma_coding_block_size
-	w.ue(0)  // log2_min_luma_transform_block_size_minus2
-	w.ue(1)  // log2_diff_max_min_luma_transform_block_size
-	w.ue(0)  // max_transform_hierarchy_depth_inter
-	w.ue(0)  // max_transform_hierarchy_depth_intra
+	sizes := [6]uint32{0, 1, 0, 1, 0, 0}
+	if s.sizes != nil {
+		copy(sizes[:], s.sizes)
+	}
+	for _, v := range sizes { // log2_min_luma_coding_block_size_minus3, log2_diff_max_min_luma_coding_block_size,
+		w.ue(v) // log2_min_luma_transform_block_size_minus2, log2_diff_max_min_luma_transform_block_size,
+	} // max_transform_hierarchy_depth_inter, max_transform_hierarchy_depth_intra
 	if s.scalingList {
 		w.bit(1) // scaling_list_enabled_flag
 		w.bit(1) // sps_scaling_list_data_present_flag
@@ -202,11 +216,15 @@ func (s set) buildTail(w *writer) {
 	w.flag(s.sao)
 	if s.pcm {
 		w.bit(1)
-		w.bits(7, 4) // pcm_sample_bit_depth_luma_minus1
-		w.bits(7, 4) // pcm_sample_bit_depth_chroma_minus1
-		w.ue(0)      // log2_min_pcm_luma_coding_block_size_minus3
-		w.ue(1)      // log2_diff_max_min_pcm_luma_coding_block_size
-		w.bit(1)     // pcm_loop_filter_disabled_flag
+		pcm := [4]uint32{7, 7, 0, 1}
+		if s.pcmFields != nil {
+			copy(pcm[:], s.pcmFields)
+		}
+		w.bits(pcm[0], 4) // pcm_sample_bit_depth_luma_minus1
+		w.bits(pcm[1], 4) // pcm_sample_bit_depth_chroma_minus1
+		w.ue(pcm[2])      // log2_min_pcm_luma_coding_block_size_minus3
+		w.ue(pcm[3])      // log2_diff_max_min_pcm_luma_coding_block_size
+		w.bit(1)          // pcm_loop_filter_disabled_flag
 	} else {
 		w.bit(0)
 	}
@@ -256,6 +274,20 @@ func (s set) buildTail(w *writer) {
 		w.bit(0)
 	}
 	w.flag(s.temporalMVP)
+	w.bit(0) // strong_intra_smoothing_enabled_flag
+	if s.vui != nil {
+		w.bit(1)
+		s.vui(w)
+	} else {
+		w.bit(0) // vui_parameters_present_flag
+	}
+	if s.ext != nil {
+		w.bit(1) // sps_extension_present_flag
+		s.ext(w)
+	} else {
+		w.bit(0) // sps_extension_present_flag
+	}
+	w.bit(1) // rbsp_stop_one_bit
 }
 
 // TestTheTwoFlagsASliceHeaderNeeds: neither is used to describe a stream, and
@@ -548,9 +580,9 @@ func TestAWidthCheckedAfterTheCastThatWraps(t *testing.T) {
 		name         string
 		luma, chroma uint32
 	}{
-		{"a luma depth one past the range", 7, 0},
+		{"a luma depth one past the range", 9, 0},
 		{"a luma depth wrapping to zero", 256, 0},
-		{"a chroma depth one past the range", 0, 7},
+		{"a chroma depth one past the range", 0, 9},
 		{"a chroma depth wrapping to zero", 0, 1 << 20},
 	} {
 		s := base()
@@ -559,10 +591,11 @@ func TestAWidthCheckedAfterTheCastThatWraps(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrUnsupportedSPS", c.name, err)
 		}
 	}
-	// Six is the largest depth the format allows -- 14 bits -- and must be read.
+	// Eight is the largest depth the format allows -- 16 bits, with the range
+	// extensions -- and must be read.
 	deep := base()
-	deep.bdLuma, deep.bdChroma = 6, 6
-	if sps, err := ParseSPS(deep.build()); err != nil || sps.BitDepthLuma != 14 {
+	deep.bdLuma, deep.bdChroma = 8, 8
+	if sps, err := ParseSPS(deep.build()); err != nil || sps.BitDepthLuma != 16 {
 		t.Errorf("a depth of 6 gave %d, %v", sps.BitDepthLuma, err)
 	}
 
