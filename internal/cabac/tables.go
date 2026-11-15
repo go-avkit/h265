@@ -97,6 +97,16 @@ var transIdxMps = [64]uint8{
 	49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 62, 63,
 }
 
+// RangeTabLps, TransIdxMps and TransIdxLps expose Tables 9-52 and 9-53 to the
+// encoder of package cabactest, which writes the streams the syntax tests read.
+func RangeTabLps(pStateIdx, qRangeIdx int) int { return int(rangeTabLps[pStateIdx][qRangeIdx]) }
+
+// TransIdxMps is transIdxMps( pStateIdx ), Table 9-53.
+func TransIdxMps(pStateIdx int) int { return int(transIdxMps[pStateIdx]) }
+
+// TransIdxLps is transIdxLps( pStateIdx ), Table 9-53.
+func TransIdxLps(pStateIdx int) int { return int(transIdxLps[pStateIdx]) }
+
 // A context variable is one byte, pStateIdx<<1 | valMps. step folds Tables 9-52
 // and 9-53 and the valMps flip of equation 9-66 into one record per
 // (context byte, qRangeIdx), so that a decision is one load: the LPS range, and
