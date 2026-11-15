@@ -1,0 +1,3 @@
+go test fuzz v1
+[]byte("\x55")
+[]byte("\x00\x01\x82\x82\x00\x82\x03")
