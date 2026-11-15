@@ -453,11 +453,13 @@ func readHRD(r *sticky, maxSubLayers int) { // commonInfPresentFlag is 1 in the 
 		}
 		cpbCnt := uint32(1)
 		if !lowDelay {
-			cpbCnt = r.ue() + 1
-		}
-		if cpbCnt > 32 { // cpb_cnt_minus1 is 0 to 31
-			r.err = fmt.Errorf("%w: %d coded picture buffers", ErrUnsupportedSPS, cpbCnt)
-			return
+			// ⛔ Bounded as read: adding the 1 first wraps 2^32-1 to zero.
+			cpbMinus1 := r.ue()
+			if r.err == nil && cpbMinus1 > 31 { // cpb_cnt_minus1 is 0 to 31
+				r.err = fmt.Errorf("%w: cpb_cnt_minus1 of %d", ErrUnsupportedSPS, cpbMinus1)
+				return
+			}
+			cpbCnt = cpbMinus1 + 1
 		}
 		for _, present := range []bool{nal, vcl} {
 			if !present {
