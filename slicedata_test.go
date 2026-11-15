@@ -46,6 +46,24 @@ type walkWriter struct {
 	cqDone, endZero, subsetZero bool
 	cqSeen, cqEnabledAt         []bool
 	hdr                         SliceHeader
+	// cu, when set, writes the coding unit; prefix holds the bytes of the current
+	// substream before a PCM block restarted the encoder.
+	cu     func(x0, y0, log2, depth int)
+	prefix []byte
+	// skip is cu_skip_flag per minimum coding block; expect the coding units
+	// written and treeBits the bin each stub transform tree wrote.
+	skip     []bool
+	expect   []CodingUnit
+	treeBits []int
+	pcmBad   bool
+	badMvd   int // which broken abs_mvd_minus2 writeMvd writes, 0 for none
+}
+
+// finish ends the substream in progress and returns its bytes.
+func (w *walkWriter) finish() []byte {
+	out := append(w.prefix, w.e.Bytes()...)
+	w.prefix = nil
+	return out
 }
 
 func (w *walkWriter) cell(x, y int) int {
@@ -191,16 +209,20 @@ func (w *walkWriter) writeQuadtree(x0, y0, log2, depth int) {
 		}
 		return
 	}
-	// The coding unit of the test: one bypass bin, and IsCuQpDeltaCoded set.
-	bit := w.rng.IntN(2)
-	w.e.Bypass(bit)
-	w.cus = append(w.cus, cuRecord{x0, y0, log2})
-	w.cuBits = append(w.cuBits, bit)
-	w.qpSeen = append(w.qpSeen, w.qpDone)
-	w.qpDone = true
-	w.cqSeen = append(w.cqSeen, w.cqDone)
-	w.cqEnabledAt = append(w.cqEnabledAt, w.hdr.CuChromaQPOffsetEnabled)
-	w.cqDone = true
+	if w.cu != nil {
+		w.cu(x0, y0, log2, depth)
+	} else {
+		// The coding unit of the test: one bypass bin, and IsCuQpDeltaCoded set.
+		bit := w.rng.IntN(2)
+		w.e.Bypass(bit)
+		w.cus = append(w.cus, cuRecord{x0, y0, log2})
+		w.cuBits = append(w.cuBits, bit)
+		w.qpSeen = append(w.qpSeen, w.qpDone)
+		w.qpDone = true
+		w.cqSeen = append(w.cqSeen, w.cqDone)
+		w.cqEnabledAt = append(w.cqEnabledAt, w.hdr.CuChromaQPOffsetEnabled)
+		w.cqDone = true
+	}
 	m := uint(s.Log2MinCbSize)
 	for y := y0 >> m; y < min((y0+size)>>m, (H+1<<m-1)>>m); y++ {
 		for x := x0 >> m; x < min((x0+size)>>m, w.cbW); x++ {
@@ -274,14 +296,14 @@ func (w *walkWriter) writeSegment(p segPlan) ([]byte, SliceHeader) {
 			if w.pps.DependentSlicesEnabled {
 				w.ds = w.m
 			}
-			substreams = append(substreams, w.e.Bytes())
+			substreams = append(substreams, w.finish())
 			break
 		}
 		nrs := int(l.TsToRs[ts+1])
 		if (w.pps.TilesEnabled && l.TileID[ts+1] != l.TileID[ts]) ||
 			(w.pps.EntropySyncEnabled && (nrs%W == 0 || l.TileID[ts+1] != l.TileID[l.RsToTs[nrs-1]])) {
 			w.e.Terminate(b2n(!w.subsetZero)) // end_of_subset_one_bit, which flushes
-			substreams = append(substreams, w.e.Bytes())
+			substreams = append(substreams, w.finish())
 		}
 	}
 	// The data, and the entry points: the sizes of the substreams in ESCAPED bytes.
@@ -357,7 +379,7 @@ func walkCase(t *testing.T, rng *rand.Rand) (*walkWriter, *PictureState, []segPl
 	ps := NewPictureState(sps, l)
 	ww := &walkWriter{sps: sps, pps: pps, l: l, rng: rng, cbW: ps.MinCbWidth,
 		done: make([]bool, len(ps.CtDepth)), depth: make([]int, len(ps.CtDepth)),
-		sliceOf: make([]int32, wc*hc), sao: make([]SaoParams, wc*hc)}
+		sliceOf: make([]int32, wc*hc), sao: make([]SaoParams, wc*hc), skip: make([]bool, len(ps.CtDepth))}
 	for i := range ww.sliceOf {
 		ww.sliceOf[i] = -1
 	}
