@@ -292,8 +292,8 @@ func (w *SliceWalker) intraChromaPredMode() uint8 {
 // restarts the engine after them (9.3.2.5).
 func (w *SliceWalker) pcmSamples(cu *CodingUnit) error {
 	s := &w.SPS
-	// 1 << (log2 << 1) is the sample count too, but on ppc64le it came out as 0
-	// here (CI, qemu), so the size is squared instead.
+	// Workaround for golang/go#81842 (backport #82879): on ppc64le 1 << (log2 << 1)
+	// came out 0 here, so the side is squared; removable once go.mod's floor is >= 1.27.5.
 	side := 1 << uint(cu.Log2Size)
 	lumaN := side * side
 	chromaN := 0
