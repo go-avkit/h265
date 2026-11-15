@@ -28,7 +28,7 @@ implementer reads them there.
 
 | Source | What was opened | Use |
 |---|---|---|
-| ITU-T H.265 (V11) (01/2026), PDF | table of contents; 8.4.4.2 from the reference filtering equations 8-36 to 8-45 through 8.4.4.2.4 to 8.4.4.2.6 (planar, DC, angular; Tables 8-5, 8-6); 8.5.3.3.3.1 to 8.5.3.3.4.3 (fractional interpolation 8-215 to 8-261, Tables 8-8 and 8-9; default and explicit weighting 8-262 to 8-277); 8.6.1 end to 8.6.5 (QP 8-281 to 8-290 and Table 8-10, scaling 8-291 to 8-309, transforms 8-310 to 8-321, bypass 8-322/8-323); 8.7.2.1 and 8.7.2.5 (equations 8-344 to 8-405, Table 8-12); 8.7.3 (SAO, 8-406 to 8-415, Table 8-13); 9.3.4.3.1 to 9.3.4.3.3 (Figure 9-5, decisions 9-64 to 9-66, Tables 9-52 and 9-53, renormalisation) | the equations every kernel below computes. Sub-clauses not opened (merge/AMVP/TMVP inside 8.5.3.2, context selection inside 9.3.4.2, residual_coding() inside 7.3.8) are cited only at the level opened |
+| ITU-T H.265 (V11) (01/2026), PDF | table of contents; 8.4.4.2 from the reference filtering equations 8-36 to 8-45 through 8.4.4.2.4 to 8.4.4.2.6 (planar, DC, angular; Tables 8-5, 8-6); 8.5.3.3.3.1 to 8.5.3.3.4.3 (fractional interpolation 8-215 to 8-261, Tables 8-8 and 8-9; default and explicit weighting 8-262 to 8-277); 8.6.1 end to 8.6.5 (QP 8-281 to 8-290 and Table 8-10, scaling 8-291 to 8-309, transforms 8-310 to 8-321, bypass 8-322/8-323); 8.7.2.1 and 8.7.2.5 (equations 8-344 to 8-405, Table 8-12); 8.7.3 (SAO, 8-406 to 8-415, Table 8-13); 9.3.4.3.1 to 9.3.4.3.5 (Figure 9-5, decisions 9-64 to 9-66, Tables 9-52 and 9-53, renormalisation, bypass decoding with Figure 9-8, terminate) | the equations every kernel below computes. Sub-clauses not opened (merge/AMVP/TMVP inside 8.5.3.2, context selection inside 9.3.4.2, residual_coding() inside 7.3.8) are cited only at the level opened |
 | ITU-T H.265.1 (10/2018), PDF | 6.5.1 to 6.5.5 (what a conformance bitstream zip holds; output-order conformance), the list of 6.6 and 6.7.1 (Table 1, Main/Main Still/Main 10 streams) | the oracle (§8) |
 | go-avkit/h265 (this repository, v0.x on `main`) | README and file list | parsing already done (§3.1) |
 | go-avkit/decode `main` | `hevc.go`, README (HEVC, Performance), `tools/jvt`; open PR #13 (`jvt bench`) | how HEVC is wired today, the conformance harness, the benchmark |
@@ -69,8 +69,12 @@ copy unless said:
 
 The harness pinned to one core with `taskset -c 4` on Zen 4. Its printed load
 reads `0.00` there because the host's locale writes `0,10` and the harness
-keeps only the integer part of a comma decimal (reported on decode#13; the
-gate at an integer `--max-load` still decides right). FFmpeg 9.0.2 on
+keeps only the integer part of a comma decimal (go-avkit/decode#91; the
+gate at an integer `--max-load` still decides right). The host's own `uptime`
+readings (0,10 and 0,46) and a re-run of the three clips under `LC_ALL=C`
+(loads 0.74 to 1.66, ratios 0.22 / 0.12 / 0.24, within run-to-run spread of the
+table) are in
+[zen4-loads-and-rerun-lc-c.txt](hevc-profile/zen4-loads-and-rerun-lc-c.txt). FFmpeg 9.0.2 on
 the M4 decodes clip b 2.5 times slower than FFmpeg 6.1.1 on Zen 4 while clip a
 is about equal: its arm64 10-bit HEVC path is the weaker one (not
 investigated). Our allocations: **2454 per picture and 3.3 MiB per picture on
@@ -162,16 +166,23 @@ altogether.
   the function that decodes a whole syntax structure (a CU, a residual block)
   and is written back once, not per bin through a struct pointer.
 
-**Bypass bins in batches (new here).** A run of k bypass bins (DecodeBypass,
-9.3.4.3) is
-one step of binary long division: the offset with the next k bits appended,
-divided by the range, gives the k bins as the quotient and the new offset as the
-remainder. HEVC has long bypass runs: the sign bits of up to 16 coefficients of
-a 4x4 sub-block (`coeff_sign_flag`), the prefix and suffix of
-`coeff_abs_level_remaining`, MVD suffixes, `cu_qp_delta_abs` and the SAO
-offsets. Decoding the signs of a sub-block in one integer division replaces up
-to 16 iterations with a data-dependent branch each. To be measured against the
-plain loop on both architectures; kept only if faster.
+**Bypass bins in batches (new here).** One bypass bin (9.3.4.3.4, Figure 9-8)
+appends one bit to the offset and subtracts the range when the offset reaches
+it: one step of binary long division by an unchanged range. A run of k bypass
+bins whose length k is **known before decoding** is therefore one division:
+the offset with the next k bits appended, divided by the range, gives the k
+bins as the quotient and the new offset as the remainder. Runs with a known k:
+the `coeff_sign_flag`s of a 4x4 sub-block (k = number of non-zero
+coefficients, minus one when a sign is hidden), the fixed-length suffix of
+`coeff_abs_level_remaining` and of MVDs once their prefix is decoded, SAO band
+position and offsets. **Unary prefixes** (the prefix of
+`coeff_abs_level_remaining`, of `abs_mvd_minus2`, of `cu_qp_delta_abs`) have no
+k in advance: they stop at the first 0 bin. For them the batch decodes a
+bounded window (k = up to the prefix's maximum length) and keeps bins up to the
+first 0; the offset after the j kept bins is the offset with the next j bits
+appended minus (the quotient's top j bits) × range, and the bit pointer moves
+by j only. Or they stay a loop. Both
+measured against the plain loop on both architectures; kept only if faster.
 
 **Residual coding (`residual_coding()` in 7.3.8, context selection in 9.3.4.2).**
 
@@ -235,8 +246,9 @@ is scalar control logic. Sample prediction:
   Table 8-9.
 - **Weighting, 8.5.3.3.4**: default uni `Clip((p + offset1) >> shift1)`
   (8-262/8-263), default bi `Clip((p0 + p1 + offset2) >> shift2)` (8-264),
-  `shift1 = 14 − bitDepth`, `shift2 = 15 − bitDepth`; explicit uni/bi (8-265 to
-  8-277).
+  with `shift1 = Max(2, 14 − bitDepth)` and `shift2 = Max(3, 15 − bitDepth)`
+  (the Max only bites above 12 bits; at 8 and 10 bits they are 14 − bitDepth
+  and 15 − bitDepth); explicit uni/bi (8-265 to 8-277).
 
 **Intermediate ranges** (the reason `int16` lanes are legal): the luma taps'
 positive sum is 88 and negative sum 24. First pass, 8 bits (shift1 = 0):
@@ -247,13 +259,18 @@ second (vertical) pass accumulates in 32 bits and shifts by 6. The 14-bit
 **Exact shortcuts** (each a theorem on the equations above, tested
 exhaustively):
 
-- Integer vector, uni, default weights: `(A << s + 2^(s−1)) >> s` with
-  `s = 14 − bitDepth` is `A`: **a copy**, no arithmetic.
-- Integer vectors, bi, default weights: `(A << s + B << s + 2^s) >> (s + 1)` is
-  `(A + B + 1) >> 1`: a rounding average (`URHADD`, `PAVGB/PAVGW`), no clip
-  needed.
-- One fractional and one integer vector: one interpolation, one rounding
-  average against the shifted integer samples, fused.
+- Integer vector, uni, default weights: `shift3` equals the weighting
+  `shift1` (both `Max(2, 14 − bitDepth)`), so `(A << s + 2^(s−1)) >> s` is
+  `A`: **a copy**, no arithmetic.
+- Integer vectors, bi, default weights: with `shift2 = s + 1`,
+  `(A << s + B << s + 2^s) >> (s + 1)` is `(A + B + 1) >> 1`: a rounding
+  average (`URHADD`, `PAVGB/PAVGW`), no clip needed.
+- One fractional and one integer vector, bi: the average is taken **in the
+  14-bit intermediate domain**: the interpolated, unrounded intermediate plus
+  `A << shift3`, plus `offset2`, shifted by `shift2`, then clipped (8-264).
+  Averaging two already-rounded predictions is **not** exact (two roundings
+  instead of one) and is not done. The integer side costs a shift, not a
+  filter, and the whole is fused in one kernel.
 
 **Fused output (§5.3)**: the filter that produces the last prediction of a
 block also applies the rounding, the clip and (for bi) the average with the
@@ -280,9 +297,15 @@ stack block, instead of padded reference pictures.
   columns give zero), the row pass reads only the non-zero part of each row.
   For 32x32 blocks with a few low-frequency coefficients, the usual case, this
   removes most of the work.
-- **DC only** (one non-zero coefficient at (0,0), very frequent): the residual
-  is one constant, obtained by running the two stages on the scalar (the same
-  equations, so exact); the add-and-clip is then a broadcast add.
+- **DC only** (one non-zero coefficient at (0,0), very frequent), **DCT
+  only**: every matrix entry that multiplies coefficient 0 in 8-317 is 64 (the
+  first printed row of 8-319 and of 8-321), so the residual is one constant, obtained by running the two stages on the scalar
+  (the same equations, so exact); the add-and-clip is then a broadcast add.
+  **Not** for the 4x4 DST (8-315/8-316: its matrix has no constant basis
+  vector, the entries are 29, 55, 74, 84 and their signs, so a lone (0,0)
+  coefficient gives a non-constant block), and
+  not for transform skip (8-298: the residual is the scaled coefficients
+  themselves, one non-zero sample).
 - **Add fused into the row pass**: the second stage writes prediction plus
   residual, clipped to the bit depth, straight into the picture (`[]byte` or
   `[]uint16`).
@@ -348,6 +371,20 @@ call in Go; portable Go written from the equations is the oracle; NEON first,
 then AVX2; zero allocations. HEVC block widths are 4, 8, 12, 16, 24, 32, 48, 64;
 assembly per width class 4, 8, ≥16 (16-column strips).
 
+**Names.** The HEVC kernels live in the existing family packages (`mc`, `lf`,
+`itx`, `ipred`, `pix`), which share the generators, the dispatch and the
+bounds proof, and carry an **`HEVC` prefix** so they cannot be confused with
+the H.264 entry points already there (`mc.PutLuma`, `mc.AvgLuma`,
+`mc.WeightUni`, `mc.WeightBi`, `lf.DeblockLumaV`…), whose arithmetic differs.
+The `uint16` form carries a `16` suffix. For example: `mc.HEVCLumaPrep`,
+`mc.HEVCLumaPut`, `mc.HEVCLumaAvg`, `mc.HEVCLumaWPut`, `mc.HEVCLumaWAvg` and
+`mc.HEVCLumaPut16`…; `mc.HEVCChroma*`; `lf.HEVCSAOBand`, `lf.HEVCSAOEdge`;
+`lf.HEVCDeblockLuma{V,H}`, `lf.HEVCDeblockChroma{V,H}`; `itx.HEVCInvDCT{4,8,16,32}Add`,
+`itx.HEVCInvDST4Add`, `itx.HEVCInvDCAdd`; `ipred.HEVCPlanar`, `ipred.HEVCDC`,
+`ipred.HEVCAngular`. A sub-package per codec (`mc/hevc`) was considered and
+not chosen: it would split one generator's output across packages and
+duplicate the bounds-proof helpers, for no gain at the call site.
+
 Expected share is of today's single-core time on Zen 4, (a / b / c).
 
 | # | Package | Kernel | Element types | Clauses | Share today | New or shared |
@@ -356,7 +393,7 @@ Expected share is of today's single-core time on Zen 4, (a / b / c).
 | 2 | `mc` | Chroma 4-tap, same five output modes | `byte`, `uint16` | 8.5.3.3.3.3 | 3.5 / 18 / 15 % | new |
 | 3 | `lf` | SAO band and edge (4 classes), whole CTB | `byte`, `uint16` | 8.7.3 | 46 / 12 / 0 % | new |
 | 4 | `lf` | HEVC luma deblock (decision + strong/normal, one run of segments per call), chroma deblock | `byte`, `uint16` | 8.7.2.5 | 12.5 / 4.6 / 6.6 % | new arithmetic; reuses the H.264 kernels' transpose and lane-mask structure |
-| 5 | `itx` | DCT 4/8/16/32, DST 4, zero-region variants (non-zero column count), DC-only, add-and-clip fused, transform skip | coefficients `int16`, destination `byte`/`uint16` | 8.6.2, 8.6.4 | 2.2 / 1.3 / 3.9 % (plus the add) | new (`itx` is empty) |
+| 5 | `itx` | DCT 4/8/16/32, DST 4, zero-region variants (non-zero column count), DC-only (DCT only, §3.5), add-and-clip fused, transform skip | coefficients `int16`, destination `byte`/`uint16` | 8.6.2, 8.6.4 | 2.2 / 1.3 / 3.9 % (plus the add) | new (`itx` is empty) |
 | 6 | `ipred` | Planar, DC (+ edge filter), angular vertical family, horizontal via transpose, reference smoothing and strong smoothing | `byte`, `uint16` | 8.4.4.2 | <1 / <1 / 1.3 % | new (`ipred` is empty) |
 | 7 | `pix` | Edge-emulation block, copy, rounding average (`uint16` too) | `byte`, `uint16` | 8-222/8-223 | in MC today | extends the planned `pix` |
 
@@ -438,10 +475,19 @@ PR that dropped them.
   Recommendation (H.265.1 Summary); no redistribution terms are stated, so they
   are **not committed** here (the policy decode already follows); tests run
   when an environment variable points at them.
-- **Trace files as a syntax oracle**: the trace in each zip lists the decoded
-  syntax elements. Slice-data parsing (PR 3 below) is checked against them
-  before any sample is reconstructed, so a CABAC or context error is located
-  to the syntax element, not to a picture MD5.
+- **Trace files as a partial syntax oracle.** H.265.1 6.5.2 says a zip holds
+  a trace file, but in fact **31 of the 147 `HEVC_v1` zips carry one**
+  (counted 2026-11-15 on the extracted archives fetched by `jvt`, by file
+  name: 30 `.trc` and one `*_trace.txt`): the `CAINIT_*` (8), `WPP_*` (12),
+  `WP_*` (4), `SAO_E/F/G`, `CIP_A/C`, `DELTAQP_A` and `TSUNEQBD_A`. Their
+  formats differ: `CAINIT_A_SHARP_4.trc` traces slice data in HM's own
+  vocabulary (skip, split, merge index, root cbf, with contexts), while
+  `DELTAQP_A_BRCM_4_trace.txt` was seen to trace headers by syntax-element
+  name; the other 29 were not inspected one by one. So the traces check
+  slice-data parsing (PR 3) on a subset only — CABAC initialisation, WPP,
+  weighted prediction — and the rest of the suite is checked from PR 4 on by
+  picture hashes. Where a trace is missing, the HM reference decoder
+  (BSD-licensed) built with its trace option can produce one for any stream.
 - The 5 x265 streams of decode's `testdata/hevc/streams` (CI, MD5s committed)
   and the 7 real-file hashes of `testdata/hevc-real-files.txt`.
 
@@ -468,7 +514,10 @@ In order of authority:
 Per-picture budget on Zen 4 for clip b (10-bit): ours 156 ms, FFmpeg 6.1.1
 19 ms. The H.264 kernels measured 4 to 47 × over portable Go on luma MC
 (4x4 to 16x16) and 2 to 7 × on deblocking (kernels README, Zen 4). Assuming
-10 × on HEVC MC and SAO, 2 × on residual and 3 × on deblocking: inter
+10 × on HEVC MC and SAO, 2 × on residual and 3 × on deblocking — **these
+factors are assumptions, not measurements: no HEVC kernel exists yet, and in
+particular the 10 × on 10-bit (`uint16`) MC is unmeasured**, since every
+kernel measured so far is 8-bit and 16-bit lanes hold half as many samples: inter
 prediction ~108 ms → ~11, SAO ~18 → ~2, residual ~9 → ~4, deblocking ~7 → ~2,
 the output copy ~8 → 0, the rest ~6 → ~4: about **23 ms, 0.8 × FFmpeg**. Clip
 a (8-bit, 10.2 ms against 2.3) comes out near 1.0 × by the same arithmetic,
@@ -500,15 +549,20 @@ go-avkit/h265 (this repository):
    initialisation tables of 9.3.2 and of Tables 9-52/9-53, declared as such),
    bypass batches, fuzz, benchmark in bins per second.
 3. Slice data syntax (7.3.8) to a per-CTU record, no samples; checked against
-   the H.265.1 trace files.
+   the 31 H.265.1 trace files that exist (§7) and HM traces where needed.
 4. Intra reconstruction, portable: reference substitution and filtering,
    35 modes, dequant, DCT/DST, add. Intra-only conformance streams with loop
-   filters disabled.
+   filters disabled. **From this PR on every stage exists for both element
+   types**, `byte` and `uint16`, generated from one source (one template, two
+   outputs, no generics in the hot path), and tested at 8 and 10 bits; no
+   8-bit-only code is written to be widened later.
 5. Deblocking and SAO, portable, CTU-lagged. All intra streams; **Main Still
    Picture complete: HEIF unblocked here.**
 6. Inter: merge, AMVP, TMVP, MC through `go-videodsp/kernels` (portable
    first), weighted prediction. All `HEVC_v1` Main streams.
-7. Main 10 (`uint16` planes end to end). All Main 10 streams.
+7. Main 10 conformance: every Main 10 stream of the suite (the `uint16` code
+   already exists since PR 4; this PR is the remaining Main 10 specifics and
+   the suite).
 8. DPB pool, output order, zero allocations per picture (allocation test).
 9. A `Decoder` API mirroring what go-avkit/decode uses from gen2brain, and the
    differential test against it.
