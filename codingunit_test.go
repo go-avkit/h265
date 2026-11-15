@@ -437,7 +437,7 @@ func TestCodingUnitSyntax(t *testing.T) {
 		for si, p := range plans {
 			payload, hdr := ww.writeSegment(p)
 			if err := DecodeSliceData(ps, Unit{Type: UnitTrailR, Payload: payload}, hdr, ww.pps, dec); err != nil {
-				t.Fatalf("iter %d segment %d of %d: %v", iter, si, len(plans), err)
+				t.Fatalf("iter %d segment %d of %d: %v\nentry points %v data offset %d\npayload %x", iter, si, len(plans), err, hdr.EntryPoints, hdr.DataOffset, payload)
 			}
 		}
 		if len(got) != len(ww.expect) {
