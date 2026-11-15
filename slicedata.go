@@ -48,6 +48,8 @@ type PictureState struct {
 	// intra or are PCM, which is what 8.4.2 takes a neighbour's mode to be.
 	IntraMode  []uint8
 	IntraWidth int
+	// CuMode is CuPredMode (a PredMode) on the same grid.
+	CuMode []uint8
 	// QpY is QpY of each coding unit on the grid of CtDepth; lastQpY is the QpY of
 	// the last coding unit decoded, which a dependent slice segment continues from.
 	QpY     []int8
@@ -68,6 +70,7 @@ func NewPictureState(sps SPS, l *CtbLayout) *PictureState {
 	ps.CtDepth = make([]uint8, ps.MinCbWidth*((int(sps.CodedHeight)+1<<minCb-1)>>minCb))
 	ps.CuSkip = make([]bool, len(ps.CtDepth))
 	ps.QpY = make([]int8, len(ps.CtDepth))
+	ps.CuMode = make([]uint8, len(ps.CtDepth))
 	ps.IntraWidth = (int(sps.CodedWidth) + 3) >> 2
 	ps.IntraMode = make([]uint8, ps.IntraWidth*((int(sps.CodedHeight)+3)>>2))
 	return ps

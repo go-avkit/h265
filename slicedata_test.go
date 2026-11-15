@@ -67,6 +67,7 @@ type walkWriter struct {
 	imode        []uint8
 	fullTree     bool
 	expectTU     []TransformUnit
+	tuCU         []int // the index in expect of the coding unit each transform unit belongs to
 	cbOff, crOff int32
 	cuQpDeltaVal int32
 	badMvd       int // which broken abs_mvd_minus2 writeMvd writes, 0 for none

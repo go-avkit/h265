@@ -338,6 +338,7 @@ func (w *walkWriter) writeTree(cu *CodingUnit, x0, y0, xBase, yBase, log2, depth
 		tu.QpPrime[1], tu.QpPrime[2] = w.qpChroma(1, tu.QpY), w.qpChroma(2, tu.QpY)
 	}
 	w.expectTU = append(w.expectTU, tu)
+	w.tuCU = append(w.tuCU, len(w.expect)-1)
 }
 
 // ttCase is a cuCase whose coding units carry a real transform tree.
