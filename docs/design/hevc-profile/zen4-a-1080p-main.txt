@@ -1,0 +1,10 @@
+round 1 a.265 load 0.00: ours 90.2 fps, ffmpeg 433.2 fps
+round 2 a.265 load 0.00: ours 98.0 fps, ffmpeg 436.4 fps
+round 3 a.265 load 0.00: ours 98.1 fps, ffmpeg 432.4 fps
+round 4 a.265 load 0.00: ours 98.1 fps, ffmpeg 434.8 fps
+round 5 a.265 load 0.00: ours 97.6 fps, ffmpeg 434.0 fps
+| input | frames ours/ffmpeg | rounds | ours fps med (min-max) | ffmpeg fps med (min-max) | ratio ours/ffmpeg | CPU ratio | allocs/frame | KiB/frame |
+|---|---|---|---|---|---|---|---|---|
+| a.265 | 240/240 | 5/5 | 98.0 (90.2-98.1) | 434.0 (432.4-436.4) | 0.23 | 0.23 | 2454.0 | 3328 |
+
+1-minute load before each run: min 0.00, median 0.00, max 0.00 (5 samples)
