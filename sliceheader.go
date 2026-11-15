@@ -83,7 +83,7 @@ func ParseSliceSegmentHeaderFull(u Unit, sps SPS, pps PPS, prev *SliceHeader) (S
 		return h, err
 	}
 	picSizeInCtbs := picSizeInCtbs(sps)
-	if picSizeInCtbs > 1<<24 {
+	if picSizeInCtbs > maxPicSizeInCtbs {
 		return h, fmt.Errorf("%w: a picture of %d coding tree blocks", ErrSliceHeader, picSizeInCtbs)
 	}
 	r := newSticky(u.Unescape())
