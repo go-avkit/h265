@@ -29,19 +29,21 @@ type pset struct {
 	extension       bool
 
 	// Overrides, zero meaning what the builder always wrote.
-	transformSkip bool
-	initQP        int32         // init_qp_minus26
-	diffDepth     *uint32       // diff_cu_qp_delta_depth, default 2
-	chromaOffsets *[2]int32     // pps_cb_qp_offset, pps_cr_qp_offset, default -1, 2
-	mergeMinus2   uint32        // log2_parallel_merge_level_minus2
-	ext           func(*writer) // what follows pps_extension_present_flag = 1
+	ppsID, spsID   uint32
+	deblockOffsets *[2]int32 // pps_beta_offset_div2, pps_tc_offset_div2; default -2, 3
+	transformSkip  bool
+	initQP         int32         // init_qp_minus26
+	diffDepth      *uint32       // diff_cu_qp_delta_depth, default 2
+	chromaOffsets  *[2]int32     // pps_cb_qp_offset, pps_cr_qp_offset, default -1, 2
+	mergeMinus2    uint32        // log2_parallel_merge_level_minus2
+	ext            func(*writer) // what follows pps_extension_present_flag = 1
 }
 
 // build writes p as a NAL unit, ending it the way a payload must end.
 func (p pset) build() Unit {
 	w := &writer{}
-	w.ue(0) // pps_pic_parameter_set_id
-	w.ue(0) // pps_seq_parameter_set_id
+	w.ue(p.ppsID) // pps_pic_parameter_set_id
+	w.ue(p.spsID) // pps_seq_parameter_set_id
 	w.flag(p.dependentSlices)
 	w.bit(0) // output_flag_present_flag
 	w.bits(p.extraBits, 3)
@@ -105,8 +107,12 @@ func (p pset) build() Unit {
 		w.bit(1) // deblocking_filter_override_enabled
 		w.flag(p.deblockDisabled)
 		if !p.deblockDisabled {
-			w.se(-2) // beta offset
-			w.se(3)  // tc offset
+			bt := [2]int32{-2, 3}
+			if p.deblockOffsets != nil {
+				bt = *p.deblockOffsets
+			}
+			w.se(bt[0]) // beta offset
+			w.se(bt[1]) // tc offset
 		}
 	}
 	w.flag(p.scalingLists)

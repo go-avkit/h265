@@ -93,22 +93,30 @@ func parseShortTermRPS(r *sticky, idx int, prior []ShortTermRPS, inSliceHeader b
 	// of what the sequence carries.
 	ref := idx - 1
 	if inSliceHeader {
-		ref = len(prior) - (int(r.ue()) + 1)
+		// ⛔ delta_idx_minus1 is checked as read: int(2^32-1) + 1 wraps to 0 on a
+		// 32-bit int, and the subtraction below would then name a set that is
+		// there.
+		deltaIdxMinus1 := r.ue()
+		if r.err == nil && uint64(deltaIdxMinus1) >= uint64(len(prior)) {
+			return out, fmt.Errorf("%w: a set predicted from %d sets back, of %d", ErrSliceHeader, uint64(deltaIdxMinus1)+1, len(prior))
+		}
+		ref = len(prior) - 1 - int(deltaIdxMinus1)
 	}
-	if ref < 0 || ref >= len(prior) {
-		return out, fmt.Errorf("%w: a set predicted from %d, which is not there", ErrSliceHeader, ref)
-	}
+	// ref is in range: the one before in a sequence parameter set (idx sets are
+	// held), or checked above in a slice header.
 	from := prior[ref]
 
 	sign := int32(1)
 	if r.flag() { // delta_rps_sign
 		sign = -1
 	}
-	abs := int32(r.ue()) + 1
-	if abs > 32768 {
-		return out, fmt.Errorf("%w: a delta of %d between sets", ErrUnsupportedSPS, abs)
+	// ⛔ abs_delta_rps_minus1 is 0 to 2^15-1 and is bounded as read: int32(2^32-1)
+	// is -1, and adding 1 made a delta of zero that passed the bound.
+	absMinus1 := r.ue()
+	if r.err == nil && absMinus1 > 32767 {
+		return out, fmt.Errorf("%w: a delta of %d between sets", ErrUnsupportedSPS, uint64(absMinus1)+1)
 	}
-	deltaRPS := sign * abs
+	deltaRPS := sign * (int32(absMinus1) + 1)
 
 	// One pair of flags per entry of the set predicted from, plus one for the
 	// predicted-from picture itself.

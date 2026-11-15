@@ -57,6 +57,7 @@ type PPS struct {
 	TileColumns            uint32
 	TileRows               uint32
 	UniformTileSpacing     bool
+	DeblockingControl      bool // deblocking_filter_control_present_flag
 	DeblockingOverride     bool
 	DeblockingDisabled     bool
 	BetaOffsetDiv2         int32
@@ -113,6 +114,10 @@ func ParsePPS(u Unit) (PPS, error) {
 
 	p.ID = r.ue()
 	p.SPSID = r.ue()
+	// 7.4.3.3: pps_pic_parameter_set_id is 0 to 63, pps_seq_parameter_set_id 0 to 15.
+	if r.err == nil && (p.ID > 63 || p.SPSID > 15) {
+		return PPS{}, fmt.Errorf("%w: parameter set ids %d and %d", ErrUnsupportedPPS, p.ID, p.SPSID)
+	}
 	p.DependentSlicesEnabled = r.flag()
 	p.OutputFlagPresent = r.flag()
 	p.ExtraSliceHeaderBits = uint8(r.bits(3))
@@ -181,12 +186,16 @@ func ParsePPS(u Unit) (PPS, error) {
 	}
 	p.LoopFilterAcrossSlices = r.flag()
 
-	if r.flag() { // deblocking_filter_control_present_flag
+	if p.DeblockingControl = r.flag(); p.DeblockingControl { // deblocking_filter_control_present_flag
 		p.DeblockingOverride = r.flag()
 		p.DeblockingDisabled = r.flag()
 		if !p.DeblockingDisabled {
 			p.BetaOffsetDiv2 = r.se()
 			p.TCOffsetDiv2 = r.se()
+			// 7.4.3.3: both in -6 to 6.
+			if r.err == nil && (p.BetaOffsetDiv2 < -6 || p.BetaOffsetDiv2 > 6 || p.TCOffsetDiv2 < -6 || p.TCOffsetDiv2 > 6) {
+				return PPS{}, fmt.Errorf("%w: deblocking offsets %d and %d", ErrUnsupportedPPS, p.BetaOffsetDiv2, p.TCOffsetDiv2)
+			}
 		}
 	}
 	if p.ScalingListPresent = r.flag(); p.ScalingListPresent { // pps_scaling_list_data_present_flag
@@ -224,6 +233,60 @@ func ParsePPS(u Unit) (PPS, error) {
 	return p, nil
 }
 
+// Validate checks what a picture parameter set states against the sequence
+// parameter set it names, which ParsePPS cannot know: the ids agree, the tile
+// grid fits the picture in coding tree blocks (7.4.3.3: at most PicWidthInCtbsY
+// columns and PicHeightInCtbsY rows, and explicit widths and heights that leave
+// at least one block for the last column and row), and the depths, the QP and the
+// range extension's fields are within what the sequence's block sizes and bit
+// depths allow. Sums are made in 64 bits: a thousand 32-bit widths overflow 32.
+func (p PPS) Validate(s SPS) error {
+	if p.SPSID != s.ID {
+		return fmt.Errorf("%w: names sequence parameter set %d, given %d", ErrUnsupportedPPS, p.SPSID, s.ID)
+	}
+	ctb := uint64(1) << s.Log2CtbSize
+	wCtb, hCtb := (uint64(s.CodedWidth)+ctb-1)/ctb, (uint64(s.CodedHeight)+ctb-1)/ctb
+	if uint64(p.TileColumns) > wCtb || uint64(p.TileRows) > hCtb {
+		return fmt.Errorf("%w: %dx%d tiles in a picture of %dx%d coding tree blocks", ErrUnsupportedPPS, p.TileColumns, p.TileRows, wCtb, hCtb)
+	}
+	for _, g := range []struct {
+		sizes []uint32
+		total uint64
+	}{{p.ColumnWidthMinus1, wCtb}, {p.RowHeightMinus1, hCtb}} {
+		var sum uint64
+		for _, v := range g.sizes {
+			sum += uint64(v) + 1
+		}
+		if sum >= g.total { // the last column or row is what remains, and is not empty
+			return fmt.Errorf("%w: stated tile sizes total %d of %d coding tree blocks", ErrUnsupportedPPS, sum, g.total)
+		}
+	}
+	diff := s.Log2CtbSize - s.Log2MinCbSize
+	if p.DiffCuQPDeltaDepth > diff {
+		return fmt.Errorf("%w: diff_cu_qp_delta_depth %d past %d", ErrUnsupportedPPS, p.DiffCuQPDeltaDepth, diff)
+	}
+	if qpBd := 6 * (int32(s.BitDepthLuma) - 8); p.InitQP-26 < -(26 + qpBd) {
+		return fmt.Errorf("%w: init_qp_minus26 %d below -(26 + %d)", ErrUnsupportedPPS, p.InitQP-26, qpBd)
+	}
+	if p.Log2ParMrgLevel > s.Log2CtbSize {
+		return fmt.Errorf("%w: Log2ParMrgLevel %d past the coding tree block size", ErrUnsupportedPPS, p.Log2ParMrgLevel)
+	}
+	x := p.Range
+	if p.TransformSkip && x.Log2MaxTransformSkipSize > s.Log2MaxTbSize {
+		return fmt.Errorf("%w: transform skip up to %d past the transform block size", ErrUnsupportedPPS, x.Log2MaxTransformSkipSize)
+	}
+	if x.ChromaQPOffsetListEnabled && (chromaArrayType(s) == 0 || x.DiffCuChromaQPOffsetDepth > diff) {
+		return fmt.Errorf("%w: a chroma QP offset list the sequence cannot use", ErrUnsupportedPPS)
+	}
+	// At most Max( 0, BitDepth - 10 ) for each component.
+	if int(x.Log2SAOOffsetScaleLuma) > max(0, int(s.BitDepthLuma)-10) ||
+		int(x.Log2SAOOffsetScaleChroma) > max(0, int(s.BitDepthChroma)-10) {
+		return fmt.Errorf("%w: SAO offset scales %d and %d past the bit depths", ErrUnsupportedPPS,
+			x.Log2SAOOffsetScaleLuma, x.Log2SAOOffsetScaleChroma)
+	}
+	return nil
+}
+
 // readExtensions reads pps_extension_present_flag and the range extension. The
 // multilayer, 3D and screen content coding extensions are refused rather than
 // skipped, as for the SPS. extData says pps_extension_4bits announced data
@@ -254,12 +317,14 @@ func (p *PPS) readExtensions(r *sticky) (extData bool, err error) {
 	}
 	x.CrossComponentPrediction = r.flag()
 	if x.ChromaQPOffsetListEnabled = r.flag(); x.ChromaQPOffsetListEnabled {
-		depth, n := r.ue(), r.ue()+1 // diff_cu_chroma_qp_offset_depth, chroma_qp_offset_list_len_minus1 + 1
-		if r.err == nil && (depth > 3 || n > 6) {
-			return false, fmt.Errorf("%w: chroma QP offset list of %d at depth %d", ErrUnsupportedPPS, n, depth)
+		// ⛔ chroma_qp_offset_list_len_minus1 is bounded as read (0 to 5); adding
+		// the 1 first wraps 2^32-1 to an empty list that passes any upper bound.
+		depth, lenMinus1 := r.ue(), r.ue()
+		if r.err == nil && (depth > 3 || lenMinus1 > 5) {
+			return false, fmt.Errorf("%w: chroma QP offset list of %d minus 1 at depth %d", ErrUnsupportedPPS, lenMinus1, depth)
 		}
 		x.DiffCuChromaQPOffsetDepth = uint8(depth)
-		for i := uint32(0); i < n && r.err == nil; i++ {
+		for i := uint32(0); i <= lenMinus1 && r.err == nil; i++ {
 			cb, cr := r.se(), r.se()
 			if cb < -12 || cb > 12 || cr < -12 || cr > 12 {
 				return false, fmt.Errorf("%w: chroma QP offsets %d and %d in the list", ErrUnsupportedPPS, cb, cr)

@@ -147,8 +147,15 @@ func TestEverySPSOfTheConformanceSuiteParses(t *testing.T) {
 		}
 		n++
 	}
-	t.Logf("%d streams", n)
+	if n != wantStreams {
+		t.Fatalf("%d streams, want %d", n, wantStreams)
+	}
+	t.Logf("conformance-count: sps streams=%d", n)
 }
+
+// wantStreams is the number of bitstreams the two pin manifests name: 147 of
+// HEVC_v1 and 49 of RExt.
+const wantStreams = 196
 
 // alignedStreams are the conformance streams whose SPS enables
 // cabac_bypass_alignment_enabled_flag (the High Throughput 4:4:4 16 Intra
@@ -253,8 +260,8 @@ func TestSPSAgainstTheTraces(t *testing.T) {
 		}
 		checked++
 	}
-	if checked < 20 {
-		t.Fatalf("only %d streams with a header trace", checked)
+	if checked != 27 || skipped != 4 {
+		t.Fatalf("%d streams compared, %d skipped; want 27 and 4", checked, skipped)
 	}
-	t.Logf("%d streams compared (%d field values), %d traces without a header", checked, fields, skipped)
+	t.Logf("conformance-count: sps-trace streams=%d fields=%d skipped=%d", checked, fields, skipped)
 }

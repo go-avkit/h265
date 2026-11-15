@@ -4,8 +4,11 @@
 package h265
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -117,7 +120,16 @@ func TestPPSBoundsRefusals(t *testing.T) {
 		"parallel merge level":     {mergeMinus2: 5},
 		"transform skip size":      {transformSkip: true, ext: ppsRangeExt(func(w *writer) { w.ue(4) })},
 		"chroma list too long":     {ext: ppsRangeExt(func(w *writer) { w.bit(0); w.bit(1); w.ue(0); w.ue(6) })},
-		"chroma list depth":        {ext: ppsRangeExt(func(w *writer) { w.bit(0); w.bit(1); w.ue(4); w.ue(0) })},
+		// ⛔ 2^32-1: the +1 wrapped it to an empty list that passed every bound.
+		"chroma list length 2^32-1": {ext: ppsRangeExt(func(w *writer) { w.bit(0); w.bit(1); w.ue(0); wideUE(w, 32) })},
+		"pps id 64":                 {ppsID: 64},
+		"sps id 16":                 {spsID: 16},
+		"pps id 2^32-2":             {ppsID: 1<<32 - 2},
+		"beta offset 7":             {deblockControl: true, deblockOffsets: &[2]int32{7, 0}},
+		"beta offset -7":            {deblockControl: true, deblockOffsets: &[2]int32{-7, 0}},
+		"tc offset 7":               {deblockControl: true, deblockOffsets: &[2]int32{0, 7}},
+		"tc offset -7":              {deblockControl: true, deblockOffsets: &[2]int32{0, -7}},
+		"chroma list depth":         {ext: ppsRangeExt(func(w *writer) { w.bit(0); w.bit(1); w.ue(4); w.ue(0) })},
 		"chroma list entry": {ext: ppsRangeExt(func(w *writer) {
 			w.bit(0)
 			w.bit(1)
@@ -141,6 +153,19 @@ func TestPPSBoundsRefusals(t *testing.T) {
 		"offsets -12 and 12":  {chromaOffsets: &[2]int32{-12, 12}},
 		"1024 tile columns":   {tiles: true, tileCols: 1024, tileRows: 1, uniform: true},
 		"merge level 4":       {mergeMinus2: 4},
+		"ids 63 and 15":       {ppsID: 63, spsID: 15},
+		"deblocking -6 and 6": {deblockControl: true, deblockOffsets: &[2]int32{-6, 6}},
+		"chroma list of 6": {ext: ppsRangeExt(func(w *writer) {
+			w.bit(0)
+			w.bit(1)
+			w.ue(0)
+			w.ue(5)
+			for i := 0; i < 12; i++ {
+				w.se(0)
+			}
+			w.ue(0)
+			w.ue(0)
+		})},
 	} {
 		if _, err := ParsePPS(p.build()); err != nil {
 			t.Errorf("%s: %v", name, err)
@@ -195,11 +220,61 @@ var ppsAliases = []struct {
 	{[]string{"slice_segment_header_extension_present_flag"}, func(p PPS) int64 { return b2i(p.SliceHeaderExtension) }},
 }
 
-// TestPPSAgainstTheTraces: the first PPS of each stream whose trace carries
-// the header, field by field.
+// ppsGroups splits a trace into one map per PPS it prints: from a
+// pps_pic_parameter_set_id line to the next one or the first slice header, first
+// value of each element within the group.
+func ppsGroups(trace []byte) []map[string]int64 {
+	var out []map[string]int64
+	var cur map[string]int64
+	sc := bufio.NewScanner(bytes.NewReader(trace))
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		m := traceRe.FindStringSubmatch(sc.Text())
+		if m == nil {
+			continue
+		}
+		v, _ := strconv.ParseInt(m[2], 10, 64)
+		switch {
+		case m[1] == "pps_pic_parameter_set_id":
+			cur = map[string]int64{}
+			out = append(out, cur)
+		case m[1] == "first_slice_segment_in_pic_flag":
+			cur = nil
+		}
+		if cur != nil {
+			if _, seen := cur[m[1]]; !seen {
+				cur[m[1]] = v
+			}
+		}
+	}
+	return out
+}
+
+// ppsOptional are the elements that exist only when a flag says so: each is
+// compared when the trace prints it, and must be printed exactly when the
+// parsed set says it is present.
+var ppsOptional = []struct {
+	name    string
+	present func(PPS) bool
+	get     func(PPS) int64
+}{
+	{"diff_cu_qp_delta_depth", func(p PPS) bool { return p.CUQPDeltaEnabled }, func(p PPS) int64 { return int64(p.DiffCuQPDeltaDepth) }},
+	{"num_tile_columns_minus1", func(p PPS) bool { return p.TilesEnabled }, func(p PPS) int64 { return int64(p.TileColumns) - 1 }},
+	{"num_tile_rows_minus1", func(p PPS) bool { return p.TilesEnabled }, func(p PPS) int64 { return int64(p.TileRows) - 1 }},
+	{"uniform_spacing_flag", func(p PPS) bool { return p.TilesEnabled }, func(p PPS) int64 { return b2i(p.UniformTileSpacing) }},
+	{"loop_filter_across_tiles_enabled_flag", func(p PPS) bool { return p.TilesEnabled }, func(p PPS) int64 { return b2i(p.LoopFilterAcrossTiles) }},
+	{"pps_beta_offset_div2", func(p PPS) bool { return p.DeblockingControl && !p.DeblockingDisabled }, func(p PPS) int64 { return int64(p.BetaOffsetDiv2) }},
+	{"pps_tc_offset_div2", func(p PPS) bool { return p.DeblockingControl && !p.DeblockingDisabled }, func(p PPS) int64 { return int64(p.TCOffsetDiv2) }},
+	{"deblocking_filter_override_enabled_flag", func(p PPS) bool { return p.DeblockingControl }, func(p PPS) int64 { return b2i(p.DeblockingOverride) }},
+	{"pps_deblocking_filter_disabled_flag", func(p PPS) bool { return p.DeblockingControl }, func(p PPS) int64 { return b2i(p.DeblockingDisabled) }},
+}
+
+// TestPPSAgainstTheTraces: EVERY PPS of each stream whose trace carries the
+// header, in order, field by field, including the tile, deblocking and
+// quantiser-depth elements where the trace prints them.
 func TestPPSAgainstTheTraces(t *testing.T) {
 	p := conformance(t)
-	checked, fields := 0, 0
+	checked, sets, fields := 0, 0, 0
 	for _, rel := range p.streams() {
 		var traceRel string
 		for cand := range p.hash {
@@ -210,44 +285,67 @@ func TestPPSAgainstTheTraces(t *testing.T) {
 		if traceRel == "" {
 			continue
 		}
-		want := firstValues(p.read(t, traceRel))
-		if _, ok := want["pps_pic_parameter_set_id"]; !ok {
+		groups := ppsGroups(p.read(t, traceRel))
+		if len(groups) == 0 {
 			continue
 		}
 		units, err := SplitAnnexB(p.read(t, rel))
 		if err != nil {
 			t.Fatal(err)
 		}
-		var pps PPS
+		var parsed []PPS
 		for _, u := range units {
 			if u.Type == UnitPPS {
-				if pps, err = ParsePPS(u); err != nil {
+				pps, err := ParsePPS(u)
+				if err != nil {
 					t.Fatalf("%s: %v", rel, err)
 				}
-				break
+				parsed = append(parsed, pps)
 			}
 		}
-		for _, f := range ppsAliases {
-			ok := false
-			for _, name := range f.names {
-				if v, present := want[name]; present {
-					ok = true
+		if len(parsed) != len(groups) {
+			t.Errorf("%s: %d picture parameter sets in the stream, %d in the trace", rel, len(parsed), len(groups))
+			continue
+		}
+		for i, pps := range parsed {
+			want := groups[i]
+			for _, f := range ppsAliases {
+				ok := false
+				for _, name := range f.names {
+					if v, present := want[name]; present {
+						ok = true
+						fields++
+						if got := f.get(pps); v != got {
+							t.Errorf("%s: PPS %d: %s: trace %d, parsed %d", rel, i, name, v, got)
+						}
+					}
+				}
+				if !ok {
+					t.Errorf("%s: PPS %d: the trace has none of %v", rel, i, f.names)
+				}
+			}
+			for _, f := range ppsOptional {
+				v, present := want[f.name]
+				if present != f.present(pps) {
+					t.Errorf("%s: PPS %d: %s printed by the trace: %v, present in the parsed set: %v", rel, i, f.name, present, f.present(pps))
+					continue
+				}
+				if present {
 					fields++
 					if got := f.get(pps); v != got {
-						t.Errorf("%s: %s: trace %d, parsed %d", rel, name, v, got)
+						t.Errorf("%s: PPS %d: %s: trace %d, parsed %d", rel, i, f.name, v, got)
 					}
 				}
 			}
-			if !ok {
-				t.Errorf("%s: the trace has none of %v", rel, f.names)
-			}
+			sets++
 		}
 		checked++
 	}
-	if checked < 20 {
-		t.Fatalf("only %d streams with a PPS trace", checked)
+	// The counts are asserted, and printed in the form the CI step greps.
+	if checked != 27 || sets < 27 {
+		t.Fatalf("%d streams, %d sets compared; want 27 streams", checked, sets)
 	}
-	t.Logf("%d streams (%d field values)", checked, fields)
+	t.Logf("conformance-count: pps-trace streams=%d sets=%d fields=%d", checked, sets, fields)
 }
 
 func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
@@ -258,15 +356,183 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		spsByID := map[uint32]SPS{}
 		for _, u := range units {
-			if u.Type != UnitPPS {
-				continue
-			}
-			n++
-			if _, err := ParsePPS(u); err != nil {
-				t.Errorf("%s: %v", rel, err)
+			switch u.Type {
+			case UnitSPS:
+				if s, err := ParseSPS(u); err == nil { // an SPS refused for bypass alignment is skipped
+					spsByID[s.ID] = s
+				}
+			case UnitPPS:
+				n++
+				pps, err := ParsePPS(u)
+				if err != nil {
+					t.Errorf("%s: %v", rel, err)
+					continue
+				}
+				// Checked against the sequence it names, when that one parsed.
+				if s, ok := spsByID[pps.SPSID]; ok {
+					if err := pps.Validate(s); err != nil {
+						t.Errorf("%s: %v", rel, err)
+					}
+				}
 			}
 		}
 	}
-	t.Logf("%d picture parameter sets", n)
+	if n != wantPPSSets {
+		t.Fatalf("%d picture parameter sets in the suite, want %d", n, wantPPSSets)
+	}
+	t.Logf("conformance-count: pps sets=%d", n)
+}
+
+// wantPPSSets is how many picture parameter sets the pinned HEVC_v1 and RExt
+// streams hold (counted when the manifests were written).
+const wantPPSSets = 1310
+
+// wideUE writes an Exp-Golomb code of n leading zeros by hand: writer.ue cannot
+// reach 2^32-1, which is the value a +1 wraps on.
+func wideUE(w *writer, n int) {
+	w.zeros(n)
+	w.bit(1)
+	w.zeros(n)
+}
+
+func TestValidateAgainstTheSPS(t *testing.T) {
+	sps := func(s set) SPS {
+		s.subLayers = 1
+		got, err := ParseSPS(s.build())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	pic := set{chroma: 1, width: 64, height: 64} // 4x4 coding tree blocks of 16, diff 1, max transform 8
+	short := set{chroma: 1, width: 64, height: 48}
+	mono := set{chroma: 0, width: 64, height: 64}
+	deep := set{chroma: 1, width: 64, height: 64, bdLuma: 4, bdChroma: 2} // 12 and 10 bits
+	one := uint32(1)
+	for name, c := range map[string]struct {
+		s    set
+		p    pset
+		fail bool
+	}{
+		"a plain set":                     {pic, pset{}, false},
+		"another sequence":                {pic, pset{spsID: 1}, true},
+		"4 tile columns, uniform":         {pic, pset{tiles: true, tileCols: 4, tileRows: 1, uniform: true}, false},
+		"5 tile columns":                  {pic, pset{tiles: true, tileCols: 5, tileRows: 1, uniform: true}, true},
+		"5 tile rows":                     {pic, pset{tiles: true, tileCols: 1, tileRows: 5, uniform: true}, true},
+		"stated widths filling the row":   {pic, pset{tiles: true, tileCols: 2, tileRows: 1}, true},
+		"stated heights, room to spare":   {pic, pset{tiles: true, tileCols: 1, tileRows: 2}, false},
+		"stated heights filling the rows": {short, pset{tiles: true, tileCols: 1, tileRows: 2}, true},
+		"quantiser depth 2 of 1":          {pic, pset{cuQPDelta: true}, true},
+		"quantiser depth 1 of 1":          {pic, pset{cuQPDelta: true, diffDepth: &one}, false},
+		"init_qp below -26":               {pic, pset{initQP: -27}, true},
+		"init_qp -26":                     {pic, pset{initQP: -26}, false},
+		"init_qp -50 at 12 bits":          {deep, pset{initQP: -50}, false},
+		"init_qp -51 at 12 bits":          {deep, pset{initQP: -51}, true},
+		"merge level 5 of 4":              {pic, pset{mergeMinus2: 3}, true},
+		"merge level 4 of 4":              {pic, pset{mergeMinus2: 2}, false},
+		"transform skip 16 of 8": {pic, pset{transformSkip: true, ext: ppsRangeExt(func(w *writer) {
+			w.ue(2)
+			w.bit(0)
+			w.bit(0)
+			w.ue(0)
+			w.ue(0)
+		})}, true},
+		"transform skip 8 of 8": {pic, pset{transformSkip: true, ext: ppsRangeExt(func(w *writer) {
+			w.ue(1)
+			w.bit(0)
+			w.bit(0)
+			w.ue(0)
+			w.ue(0)
+		})}, false},
+		"chroma list without chroma": {mono, pset{ext: ppsRangeExt(func(w *writer) {
+			w.bit(0)
+			w.bit(1)
+			w.ue(0)
+			w.ue(0)
+			w.se(0)
+			w.se(0)
+			w.ue(0)
+			w.ue(0)
+		})}, true},
+		"chroma list too deep": {pic, pset{ext: ppsRangeExt(func(w *writer) {
+			w.bit(0)
+			w.bit(1)
+			w.ue(2)
+			w.ue(0)
+			w.se(0)
+			w.se(0)
+			w.ue(0)
+			w.ue(0)
+		})}, true},
+		"chroma list in range": {pic, pset{ext: ppsRangeExt(func(w *writer) {
+			w.bit(0)
+			w.bit(1)
+			w.ue(1)
+			w.ue(0)
+			w.se(0)
+			w.se(0)
+			w.ue(0)
+			w.ue(0)
+		})}, false},
+		"SAO luma scale at 8 bits":    {pic, pset{ext: ppsRangeExt(func(w *writer) { w.bit(0); w.bit(0); w.ue(1); w.ue(0) })}, true},
+		"SAO chroma scale at 8 bits":  {pic, pset{ext: ppsRangeExt(func(w *writer) { w.bit(0); w.bit(0); w.ue(0); w.ue(1) })}, true},
+		"SAO scales 2 and 0 at 12/10": {deep, pset{ext: ppsRangeExt(func(w *writer) { w.bit(0); w.bit(0); w.ue(2); w.ue(0) })}, false},
+		"SAO chroma scale 1 at 10":    {deep, pset{ext: ppsRangeExt(func(w *writer) { w.bit(0); w.bit(0); w.ue(0); w.ue(1) })}, true},
+	} {
+		pps, err := ParsePPS(c.p.build())
+		if err != nil {
+			t.Errorf("%s: the PPS itself is refused: %v", name, err)
+			continue
+		}
+		err = pps.Validate(sps(c.s))
+		if c.fail != (err != nil) || (err != nil && !errors.Is(err, ErrUnsupportedPPS)) {
+			t.Errorf("%s: Validate = %v, want failure %v", name, err, c.fail)
+		}
+	}
+}
+
+// TestNoPlusOneWraps: every `ue() + 1` of a count or size is bounded as read.
+// 2^32-1 is the value the +1 wraps on, and each of these used to be accepted.
+func TestNoPlusOneWraps(t *testing.T) {
+	// A coded picture buffer count of 2^32-1 in an HRD.
+	s := base()
+	s.vui = func(w *writer) {
+		w.zeros(4)
+		w.zeros(3)
+		w.bit(0)
+		w.bit(1) // vui_timing_info_present_flag
+		w.bits(0, 64)
+		w.bit(0)
+		w.bit(1) // vui_hrd_parameters_present_flag
+		w.bit(1) // nal_hrd_parameters_present_flag
+		w.bit(0)
+		w.bit(0) // sub_pic_hrd_params_present_flag
+		w.bits(0, 8+15)
+		w.bit(1) // fixed_pic_rate_general_flag
+		w.ue(0)
+		wideUE(w, 32) // cpb_cnt_minus1
+	}
+	if _, err := ParseSPS(s.build()); !errors.Is(err, ErrUnsupportedSPS) {
+		t.Errorf("cpb_cnt_minus1 of 2^32-1: %v", err)
+	}
+	// abs_delta_rps_minus1 of 2^32-1 in a predicted short-term set: int32 made it
+	// -1, so the delta came out 0 and passed.
+	w := &writer{}
+	w.bit(1) // inter_ref_pic_set_prediction_flag
+	w.bit(0) // delta_rps_sign
+	wideUE(w, 32)
+	w.bits(0, 16)
+	if _, err := parseShortTermRPS(newSticky(w.data), 1, []ShortTermRPS{{}}, false); !errors.Is(err, ErrUnsupportedSPS) {
+		t.Errorf("abs_delta_rps_minus1 of 2^32-1: %v", err)
+	}
+	// delta_idx_minus1 of 2^32-1 in a slice header: +1 wraps to 0 on a 32-bit int.
+	w = &writer{}
+	w.bit(1) // inter_ref_pic_set_prediction_flag
+	wideUE(w, 32)
+	w.bits(0, 16)
+	if _, err := parseShortTermRPS(newSticky(w.data), 2, []ShortTermRPS{{}, {}}, true); !errors.Is(err, ErrSliceHeader) {
+		t.Errorf("delta_idx_minus1 of 2^32-1: %v", err)
+	}
 }
