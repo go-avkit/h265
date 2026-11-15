@@ -194,7 +194,7 @@ func compareLists(t *testing.T, where string, h SliceHeader, tr sliceTrace) int 
 // trace prints slice headers compares them element by element and by length.
 func TestEverySliceHeaderOfTheConformanceSuite(t *testing.T) {
 	p := conformance(t)
-	slices, refused, compared, fields, lengths := 0, 0, 0, 0, 0
+	slices, refused, compared, fields, lengths, subsetChecks := 0, 0, 0, 0, 0, 0
 	for _, rel := range p.streams() {
 		units, err := SplitAnnexB(p.read(t, rel))
 		if err != nil {
@@ -208,15 +208,19 @@ func TestEverySliceHeaderOfTheConformanceSuite(t *testing.T) {
 			}
 		}
 		spsByID, ppsByID := map[uint32]SPS{}, map[uint32]PPS{}
+		layouts, epoch := map[[2]int]*CtbLayout{}, 0
+		var segs []segment
 		var prev *SliceHeader
 		n := 0
 		for _, u := range units {
 			switch {
 			case u.Type == UnitSPS:
+				epoch++
 				if s, err := ParseSPS(u); err == nil {
 					spsByID[s.ID] = s
 				}
 			case u.Type == UnitPPS:
+				epoch++
 				if pps, err := ParsePPS(u); err == nil {
 					ppsByID[pps.ID] = pps
 				}
@@ -246,6 +250,17 @@ func TestEverySliceHeaderOfTheConformanceSuite(t *testing.T) {
 					hh := h
 					prev = &hh
 				}
+				// The layout of the picture, for the subset check below.
+				key := [2]int{int(pps.ID), epoch}
+				l := layouts[key]
+				if l == nil {
+					var err error
+					if l, err = NewCtbLayout(sps, pps); err != nil {
+						t.Fatalf("%s: slice %d: %v", rel, n, err)
+					}
+					layouts[key] = l
+				}
+				segs = append(segs, segment{h.FirstSliceSegmentInPic, int(l.RsToTs[h.SegmentAddress]), len(h.EntryPoints), l, pps})
 				if h.DataOffset <= 0 || h.DataOffset > len(u.Unescape()) {
 					t.Errorf("%s: slice %d: data offset %d of %d bytes", rel, n, h.DataOffset, len(u.Unescape()))
 				}
@@ -278,6 +293,7 @@ func TestEverySliceHeaderOfTheConformanceSuite(t *testing.T) {
 				n++
 			}
 		}
+		subsetChecks += checkSubsets(t, rel, segs)
 		// TSUNEQBD_A's trace prints 2 of its 8 slice headers; every other trace
 		// prints each header once (after the duplicates are dropped).
 		if short := strings.HasPrefix(rel, "TSUNEQBD_A"); len(traces) != 0 && len(traces) != n && !short {
@@ -292,7 +308,55 @@ func TestEverySliceHeaderOfTheConformanceSuite(t *testing.T) {
 	if lengths == 0 || lengths != compared {
 		t.Fatalf("lengths compared %d of %d traced headers", lengths, compared)
 	}
-	t.Logf("conformance-count: slices=%d refused=%d traced=%d fields=%d lengths=%d", slices, refused, compared, fields, lengths)
+	if subsetChecks == 0 {
+		t.Fatal("no slice segment was checked against its subsets")
+	}
+	t.Logf("conformance-count: slices=%d refused=%d traced=%d fields=%d lengths=%d subsets=%d", slices, refused, compared, fields, lengths, subsetChecks)
+}
+
+// segment is what the subset check keeps of a slice segment: where it starts in
+// tile scan, how many entry points it states, and the picture's layout.
+type segment struct {
+	first   bool
+	ts      int
+	entries int
+	l       *CtbLayout
+	pps     PPS
+}
+
+// checkSubsets is 7.4.7.1: a segment's num_entry_point_offsets + 1 is the number
+// of tiles it touches (tiles only), of CTB rows (WPP only), or of CTB rows within
+// tiles (both). It ties the header to the layout of 6.5.1 from two sides, and
+// returns how many segments it checked.
+func checkSubsets(t *testing.T, rel string, segs []segment) int {
+	t.Helper()
+	checked := 0
+	for i, s := range segs {
+		if !s.pps.TilesEnabled && !s.pps.EntropySyncEnabled {
+			continue
+		}
+		end := len(s.l.TsToRs)
+		if i+1 < len(segs) && !segs[i+1].first {
+			end = segs[i+1].ts
+		}
+		keys := map[[2]int32]bool{}
+		for ts := s.ts; ts < end; ts++ {
+			rs := int(s.l.TsToRs[ts])
+			var k [2]int32
+			if s.pps.TilesEnabled {
+				k[0] = s.l.TileID[ts]
+			}
+			if s.pps.EntropySyncEnabled {
+				k[1] = int32(rs / s.l.WidthCtbs)
+			}
+			keys[k] = true
+		}
+		if len(keys) != s.entries+1 {
+			t.Errorf("%s: segment %d: %d entry points for %d subsets", rel, i, s.entries, len(keys))
+		}
+		checked++
+	}
+	return checked
 }
 
 // wantSlices and wantSlicesRefused are what the pinned streams hold: the slice
