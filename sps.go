@@ -55,6 +55,26 @@ type SPS struct {
 	SAOEnabled         bool
 	TemporalMVPEnabled bool
 
+	// The block geometry, as the base-2 logarithms of sizes in luma samples
+	// (7.4.3.2.1): MinCbLog2SizeY, CtbLog2SizeY, MinTbLog2SizeY, MaxTbLog2SizeY.
+	Log2MinCbSize, Log2CtbSize   uint8
+	Log2MinTbSize, Log2MaxTbSize uint8
+	// MaxTransformHierarchyDepthInter and ...Intra are the depths of the
+	// transform tree below a coding unit.
+	MaxTransformHierarchyDepthInter, MaxTransformHierarchyDepthIntra uint8
+	ScalingListEnabled                                               bool
+	AMPEnabled                                                       bool
+	StrongIntraSmoothing                                             bool
+	// PCM is the pcm_enabled_flag group; its sample bit depths are in bits.
+	PCM struct {
+		Enabled                      bool
+		BitDepthLuma, BitDepthChroma uint8
+		Log2MinCbSize, Log2MaxCbSize uint8
+		LoopFilterDisabled           bool
+	}
+	// Range is sps_range_extension; all false without one.
+	Range RangeExtension
+
 	ShortTermRefPicSets []ShortTermRPS
 	// LongTermRefPics are the long-term pictures the sequence offers, named by
 	// the low bits of their order count.
@@ -147,22 +167,37 @@ func ParseSPS(u Unit) (SPS, error) {
 	s.Log2MaxPOCLSB = uint8(pocW) + 4
 
 	s.skipSubLayerOrdering(r)
-	s.skipCodingBlockSizes(r)
+	if err := s.readCodingBlockSizes(r); err != nil {
+		return s, err
+	}
 	if r.flag() { // scaling_list_enabled_flag
+		s.ScalingListEnabled = true
 		if r.flag() { // sps_scaling_list_data_present_flag
 			// The same structure the picture parameter set carries, and the
 			// same reader: a second copy would be a second thing to drift.
 			skipScalingListData(r)
 		}
 	}
-	r.bit() // amp_enabled_flag
+	s.AMPEnabled = r.flag()
 	s.SAOEnabled = r.flag()
 	if r.flag() { // pcm_enabled_flag
-		r.bits(4) // pcm_sample_bit_depth_luma_minus1
-		r.bits(4) // pcm_sample_bit_depth_chroma_minus1
-		r.ue()    // log2_min_pcm_luma_coding_block_size_minus3
-		r.ue()    // log2_diff_max_min_pcm_luma_coding_block_size
-		r.bit()   // pcm_loop_filter_disabled_flag
+		s.PCM.Enabled = true
+		s.PCM.BitDepthLuma = uint8(r.bits(4)) + 1
+		s.PCM.BitDepthChroma = uint8(r.bits(4)) + 1
+		minPCM, diffPCM := r.ue(), r.ue()
+		s.PCM.LoopFilterDisabled = r.flag()
+		// A reader that has failed returns zeros, which pass the checks below;
+		// the failure itself is reported after them.
+		// 7.4.3.2.1: Log2MinIpcmCbSizeY is 3 to Min( CtbLog2SizeY, 5 ), and the
+		// largest is Min( CtbLog2SizeY, 5 ).
+		if minPCM > 2 || diffPCM > 2 || uint8(minPCM)+3+uint8(diffPCM) > min(s.Log2CtbSize, 5) {
+			return s, fmt.Errorf("%w: PCM block sizes %d and %d past the coding tree", ErrUnsupportedSPS, minPCM, diffPCM)
+		}
+		if s.PCM.BitDepthLuma > s.BitDepthLuma || s.PCM.BitDepthChroma > s.BitDepthChroma {
+			return s, fmt.Errorf("%w: PCM bit depths past the coded ones", ErrUnsupportedSPS)
+		}
+		s.PCM.Log2MinCbSize = uint8(minPCM) + 3
+		s.PCM.Log2MaxCbSize = s.PCM.Log2MinCbSize + uint8(diffPCM)
 	}
 	if r.err != nil {
 		return s, r.err
@@ -172,9 +207,27 @@ func ParseSPS(u Unit) (SPS, error) {
 	}
 	s.readLongTermRefPics(r)
 	s.TemporalMVPEnabled = r.flag()
-
+	s.StrongIntraSmoothing = r.flag()
+	if r.flag() { // vui_parameters_present_flag
+		readVUI(r, int(s.MaxSubLayers))
+	}
+	extData, err := s.readExtensions(r)
+	if err != nil {
+		return s, err
+	}
 	if r.err != nil {
 		return s, r.err
+	}
+	// ⛔ As for a picture parameter set: the payload ends on the stop bit, or a
+	// field was read wrongly. Extension data (sps_extension_4bits) is the one
+	// thing allowed to follow, and it is ignored.
+	if !extData {
+		if r.moreData() {
+			return s, fmt.Errorf("%w: %d bits left over, so a field was read wrongly", ErrUnsupportedSPS, r.r.Left())
+		}
+		if r.bit() != 1 || r.err != nil { // rbsp_stop_one_bit
+			return s, fmt.Errorf("%w: no stop bit at the end", ErrUnsupportedSPS)
+		}
 	}
 	if s.CodedWidth == 0 || s.CodedHeight == 0 {
 		return s, fmt.Errorf("%w: a coded size of %dx%d", ErrUnsupportedSPS, s.CodedWidth, s.CodedHeight)
@@ -199,15 +252,191 @@ func (s *SPS) skipSubLayerOrdering(r *sticky) {
 	}
 }
 
-// skipCodingBlockSizes consumes the coding and transform block geometry and the
-// transform hierarchy depths.
-func (s *SPS) skipCodingBlockSizes(r *sticky) {
-	r.ue() // log2_min_luma_coding_block_size_minus3
-	r.ue() // log2_diff_max_min_luma_coding_block_size
-	r.ue() // log2_min_luma_transform_block_size_minus2
-	r.ue() // log2_diff_max_min_luma_transform_block_size
-	r.ue() // max_transform_hierarchy_depth_inter
-	r.ue() // max_transform_hierarchy_depth_intra
+// readCodingBlockSizes reads the coding and transform block geometry and the
+// transform hierarchy depths, each bounded before it is narrowed (7.4.3.2.1:
+// CtbLog2SizeY 4 to 6 in every profile of the design, MinCbLog2SizeY at least 3,
+// a transform block never larger than 32 or than the coding tree block).
+func (s *SPS) readCodingBlockSizes(r *sticky) error {
+	minCb, diffCb := r.ue(), r.ue() // log2_min_luma_coding_block_size_minus3, log2_diff_max_min_luma_coding_block_size
+	minTb, diffTb := r.ue(), r.ue() // log2_min_luma_transform_block_size_minus2, log2_diff_max_min_luma_transform_block_size
+	depthInter, depthIntra := r.ue(), r.ue()
+	if r.err != nil {
+		return r.err
+	}
+	if minCb > 3 || diffCb > 3 || minCb+diffCb+3 > 6 {
+		return fmt.Errorf("%w: coding block sizes %d and %d", ErrUnsupportedSPS, minCb, diffCb)
+	}
+	s.Log2MinCbSize = uint8(minCb) + 3
+	s.Log2CtbSize = s.Log2MinCbSize + uint8(diffCb)
+	if s.Log2CtbSize < 4 {
+		return fmt.Errorf("%w: a coding tree block of %d samples", ErrUnsupportedSPS, 1<<s.Log2CtbSize)
+	}
+	if minTb > 3 || diffTb > 3 || minTb+2+diffTb > 5 {
+		return fmt.Errorf("%w: transform block sizes %d and %d", ErrUnsupportedSPS, minTb, diffTb)
+	}
+	s.Log2MinTbSize = uint8(minTb) + 2
+	s.Log2MaxTbSize = s.Log2MinTbSize + uint8(diffTb)
+	if s.Log2MinTbSize >= s.Log2MinCbSize || s.Log2MaxTbSize > s.Log2CtbSize {
+		return fmt.Errorf("%w: transform blocks of %d to %d in coding blocks of %d to %d",
+			ErrUnsupportedSPS, 1<<s.Log2MinTbSize, 1<<s.Log2MaxTbSize, 1<<s.Log2MinCbSize, 1<<s.Log2CtbSize)
+	}
+	// max_transform_hierarchy_depth_*: 0 to CtbLog2SizeY - MinTbLog2SizeY.
+	if limit := uint32(s.Log2CtbSize - s.Log2MinTbSize); depthInter > limit || depthIntra > limit {
+		return fmt.Errorf("%w: transform hierarchy depths %d and %d", ErrUnsupportedSPS, depthInter, depthIntra)
+	}
+	s.MaxTransformHierarchyDepthInter, s.MaxTransformHierarchyDepthIntra = uint8(depthInter), uint8(depthIntra)
+	return nil
+}
+
+// RangeExtension is sps_range_extension (7.3.2.2.2), all false when the set
+// does not carry one.
+type RangeExtension struct {
+	TransformSkipRotation       bool
+	TransformSkipContext        bool
+	ImplicitRDPCM               bool
+	ExplicitRDPCM               bool
+	ExtendedPrecisionProcessing bool
+	IntraSmoothingDisabled      bool
+	HighPrecisionOffsets        bool
+	PersistentRiceAdaptation    bool
+	// CabacBypassAlignment is cabac_bypass_alignment_enabled_flag, which the
+	// CABAC engine refuses (internal/cabac.ErrBypassAlignment).
+	CabacBypassAlignment bool
+}
+
+// readExtensions reads sps_extension_present_flag and what it announces. The
+// range extension is read; the multilayer extension is one bit and is spent;
+// the 3D and screen content coding extensions, whose pictures this decoder
+// does not decode, are refused rather than skipped, because their syntax
+// follows and a skipped extension would hide a stream the decoder cannot
+// follow.
+func (s *SPS) readExtensions(r *sticky) (extData bool, err error) {
+	if !r.flag() { // sps_extension_present_flag
+		return false, nil
+	}
+	rangeExt, multilayer, ext3D, scc := r.flag(), r.flag(), r.flag(), r.flag()
+	extData = r.bits(4) != 0 // sps_extension_4bits: sps_extension_data_flag follows, ignored
+	if r.err != nil {
+		return false, r.err
+	}
+	if rangeExt {
+		s.Range = RangeExtension{
+			TransformSkipRotation:       r.flag(),
+			TransformSkipContext:        r.flag(),
+			ImplicitRDPCM:               r.flag(),
+			ExplicitRDPCM:               r.flag(),
+			ExtendedPrecisionProcessing: r.flag(),
+			IntraSmoothingDisabled:      r.flag(),
+			HighPrecisionOffsets:        r.flag(),
+			PersistentRiceAdaptation:    r.flag(),
+			CabacBypassAlignment:        r.flag(),
+		}
+	}
+	if multilayer {
+		r.bit() // inter_view_mv_vert_constraint_flag (Annex F)
+	}
+	if ext3D || scc {
+		return false, fmt.Errorf("%w: a 3D or screen content coding extension", ErrUnsupportedSPS)
+	}
+	return extData, nil
+}
+
+// readVUI reads vui_parameters (E.2.1) without keeping it: the fields after it
+// cannot be found otherwise. Truncation is the sticky reader's to report.
+func readVUI(r *sticky, maxSubLayers int) {
+	if r.flag() { // aspect_ratio_info_present_flag
+		if r.bits(8) == 255 { // aspect_ratio_idc == EXTENDED_SAR
+			r.skip(32) // sar_width, sar_height
+		}
+	}
+	if r.flag() { // overscan_info_present_flag
+		r.bit()
+	}
+	if r.flag() { // video_signal_type_present_flag
+		r.skip(3 + 1) // video_format, video_full_range_flag
+		if r.flag() { // colour_description_present_flag
+			r.skip(24)
+		}
+	}
+	if r.flag() { // chroma_loc_info_present_flag
+		r.ue()
+		r.ue()
+	}
+	r.skip(3)     // neutral_chroma_indication_flag, field_seq_flag, frame_field_info_present_flag
+	if r.flag() { // default_display_window_flag
+		for i := 0; i < 4; i++ {
+			r.ue()
+		}
+	}
+	if r.flag() { // vui_timing_info_present_flag
+		r.skip(64)    // vui_num_units_in_tick, vui_time_scale
+		if r.flag() { // vui_poc_proportional_to_timing_flag
+			r.ue()
+		}
+		if r.flag() { // vui_hrd_parameters_present_flag
+			readHRD(r, maxSubLayers)
+		}
+	}
+	if r.flag() { // bitstream_restriction_flag
+		r.skip(3) // tiles_fixed_structure_flag, motion_vectors_over_pic_boundaries_flag, restricted_ref_pic_lists_flag
+		for i := 0; i < 5; i++ {
+			r.ue() // min_spatial_segmentation_idc .. log2_max_mv_length_vertical
+		}
+	}
+}
+
+// readHRD reads hrd_parameters (E.2.2) and sub_layer_hrd_parameters (E.2.3),
+// with the inferences of E.3.2: fixed_pic_rate_within_cvs_flag is 1 when
+// fixed_pic_rate_general_flag is, low_delay_hrd_flag and cpb_cnt_minus1 are 0
+// when absent.
+func readHRD(r *sticky, maxSubLayers int) { // commonInfPresentFlag is 1 in the VUI
+	nal, vcl := r.flag(), r.flag()
+	var subPic bool
+	if nal || vcl {
+		if subPic = r.flag(); subPic {
+			r.skip(8 + 5 + 1 + 5) // tick_divisor_minus2, du_cpb_removal_delay_increment_length_minus1, sub_pic_cpb_params_in_pic_timing_sei_flag, dpb_output_delay_du_length_minus1
+		}
+		r.skip(4 + 4) // bit_rate_scale, cpb_size_scale
+		if subPic {
+			r.skip(4) // cpb_size_du_scale
+		}
+		r.skip(5 + 5 + 5) // the three delay lengths
+	}
+	for i := 0; i < maxSubLayers && r.err == nil; i++ {
+		fixedGeneral := r.flag()
+		fixedCVS := true
+		if !fixedGeneral {
+			fixedCVS = r.flag()
+		}
+		lowDelay := false
+		if fixedCVS {
+			r.ue() // elemental_duration_in_tc_minus1
+		} else {
+			lowDelay = r.flag()
+		}
+		cpbCnt := uint32(1)
+		if !lowDelay {
+			cpbCnt = r.ue() + 1
+		}
+		if cpbCnt > 32 { // cpb_cnt_minus1 is 0 to 31
+			r.err = fmt.Errorf("%w: %d coded picture buffers", ErrUnsupportedSPS, cpbCnt)
+			return
+		}
+		for _, present := range []bool{nal, vcl} {
+			if !present {
+				continue
+			}
+			for j := uint32(0); j < cpbCnt; j++ {
+				r.ue() // bit_rate_value_minus1
+				r.ue() // cpb_size_value_minus1
+				if subPic {
+					r.ue() // cpb_size_du_value_minus1
+					r.ue() // bit_rate_du_value_minus1
+				}
+				r.bit() // cbr_flag
+			}
+		}
+	}
 }
 
 // readShortTermRefPicSets reads every set the sequence carries.
