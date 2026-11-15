@@ -286,7 +286,10 @@ func (w *SliceWalker) intraChromaPredMode() uint8 {
 // restarts the engine after them (9.3.2.5).
 func (w *SliceWalker) pcmSamples(cu *CodingUnit) error {
 	s := &w.SPS
-	lumaN := 1 << (cu.Log2Size << 1)
+	// 1 << (log2 << 1) is the sample count too, but on ppc64le it came out as 0
+	// here (CI, qemu), so the size is squared instead.
+	side := 1 << uint(cu.Log2Size)
+	lumaN := side * side
 	chromaN := 0
 	if w.chroma != 0 {
 		subW, subH := 2, 2
@@ -296,7 +299,7 @@ func (w *SliceWalker) pcmSamples(cu *CodingUnit) error {
 		case 3:
 			subW, subH = 1, 1
 		}
-		chromaN = (2 << (cu.Log2Size << 1)) / (subW * subH)
+		chromaN = 2 * lumaN / (subW * subH)
 	}
 	bdL, bdC := int(s.PCM.BitDepthLuma), int(s.PCM.BitDepthChroma)
 	start := w.pos + int((w.D.BitPos()+7)/8)
