@@ -55,7 +55,12 @@ type walkWriter struct {
 	skip     []bool
 	expect   []CodingUnit
 	treeBits []int
-	pcmBad   bool
+	// The writer's own state for QpY (8.6.1): the QpY of the last coding unit, now
+	// and at the end of the segment before, qPY_PRED of the quantization group in
+	// progress, and QpY of every minimum coding block.
+	lastQp, dsLastQp, qpPred int32
+	qpMap                    []int32
+	pcmBad                   bool
 	// imode is IntraPredModeY per 4x4 block; fullTree writes real transform trees
 	// and expectTU what the decoder must read from them; cbOff, crOff and
 	// cuQpDeltaVal are the state of delta_qp( ) and chroma_qp_offset( ).
@@ -197,6 +202,9 @@ func (w *walkWriter) writeQuadtree(x0, y0, log2, depth int) {
 		}
 		w.bin(cabac.CtxSplitCU+inc, b2n(split))
 	}
+	if log2 >= int(s.Log2CtbSize)-int(w.pps.DiffCuQPDeltaDepth) {
+		w.startQG(x0, y0)
+	}
 	if w.pps.CUQPDeltaEnabled && log2 >= int(s.Log2CtbSize)-int(w.pps.DiffCuQPDeltaDepth) {
 		w.qpDone, w.cuQpDeltaVal = false, 0
 	}
@@ -231,6 +239,7 @@ func (w *walkWriter) writeQuadtree(x0, y0, log2, depth int) {
 		w.cqEnabledAt = append(w.cqEnabledAt, w.hdr.CuChromaQPOffsetEnabled)
 		w.cqDone = true
 	}
+	w.endCU(x0, y0, log2)
 	m := uint(s.Log2MinCbSize)
 	for y := y0 >> m; y < min((y0+size)>>m, (H+1<<m-1)>>m); y++ {
 		for x := x0 >> m; x < min((x0+size)>>m, w.cbW); x++ {
@@ -285,6 +294,12 @@ func (w *walkWriter) writeSegment(p segPlan) ([]byte, SliceHeader) {
 			default:
 				w.m = w.ds
 			}
+			// qPY_PREV starts at SliceQpY with a slice, a tile or a wavefront row.
+			if (segStart && !p.dependent) || firstInTile || wppRow {
+				w.lastQp = p.hdr.SliceQP
+			} else {
+				w.lastQp = w.dsLastQp
+			}
 			if !segStart {
 				w.e = cabactest.New()
 			}
@@ -302,6 +317,7 @@ func (w *walkWriter) writeSegment(p segPlan) ([]byte, SliceHeader) {
 		last := ts == p.endTs-1
 		w.e.Terminate(b2n(last && !w.endZero))
 		if last {
+			w.dsLastQp = w.lastQp
 			if w.pps.DependentSlicesEnabled {
 				w.ds = w.m
 			}
@@ -389,7 +405,7 @@ func walkCase(t *testing.T, rng *rand.Rand) (*walkWriter, *PictureState, []segPl
 	ww := &walkWriter{sps: sps, pps: pps, l: l, rng: rng, cbW: ps.MinCbWidth,
 		done: make([]bool, len(ps.CtDepth)), depth: make([]int, len(ps.CtDepth)),
 		sliceOf: make([]int32, wc*hc), sao: make([]SaoParams, wc*hc), skip: make([]bool, len(ps.CtDepth)),
-		imode: make([]uint8, ps.IntraWidth*((int(sps.CodedHeight)+3)>>2))}
+		imode: make([]uint8, ps.IntraWidth*((int(sps.CodedHeight)+3)>>2)), qpMap: make([]int32, len(ps.CtDepth))}
 	for i := range ww.sliceOf {
 		ww.sliceOf[i] = -1
 	}

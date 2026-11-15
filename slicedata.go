@@ -48,6 +48,10 @@ type PictureState struct {
 	// intra or are PCM, which is what 8.4.2 takes a neighbour's mode to be.
 	IntraMode  []uint8
 	IntraWidth int
+	// QpY is QpY of each coding unit on the grid of CtDepth; lastQpY is the QpY of
+	// the last coding unit decoded, which a dependent slice segment continues from.
+	QpY     []int8
+	lastQpY int32
 
 	wpp, ds cabac.Model
 }
@@ -63,6 +67,7 @@ func NewPictureState(sps SPS, l *CtbLayout) *PictureState {
 	ps.MinCbWidth = (int(sps.CodedWidth) + 1<<minCb - 1) >> minCb
 	ps.CtDepth = make([]uint8, ps.MinCbWidth*((int(sps.CodedHeight)+1<<minCb-1)>>minCb))
 	ps.CuSkip = make([]bool, len(ps.CtDepth))
+	ps.QpY = make([]int8, len(ps.CtDepth))
 	ps.IntraWidth = (int(sps.CodedWidth) + 3) >> 2
 	ps.IntraMode = make([]uint8, ps.IntraWidth*((int(sps.CodedHeight)+3)>>2))
 	return ps
@@ -92,6 +97,10 @@ type SliceWalker struct {
 	// CuQpOffsetCb and CuQpOffsetCr are set by chroma_qp_offset( ) (7.4.9.15); they
 	// start at 0 for each slice segment (7.4.7.1).
 	CuQpOffsetCb, CuQpOffsetCr int32
+
+	// lastQpY is the QpY of the last coding unit decoded (qPY_PREV of the next
+	// quantization group); qpPred is qPY_PRED of the current one.
+	lastQpY, qpPred int32
 
 	// The residual blocks of the transform unit being read, and their levels.
 	tuBlocks [5]TUBlock
@@ -165,6 +174,15 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 			default: // the first CTU of a dependent slice segment
 				w.M = ps.ds
 			}
+			// 8.6.1: qPY_PREV is SliceQpY for the first quantization group of a
+			// slice, of a tile and (with wavefronts) of a CTB row of a tile, and
+			// otherwise the QpY of the last coding unit before it, which a dependent
+			// slice segment takes from the segment before.
+			if (first && !hdr.Dependent) || firstInTile || rowStart {
+				w.lastQpY = hdr.SliceQP
+			} else {
+				w.lastQpY = ps.lastQpY
+			}
 			if err := w.D.Start(data[w.pos:], cabac.Config{}); err != nil {
 				return fmt.Errorf("%w: %w", ErrSliceData, err)
 			}
@@ -185,6 +203,7 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 		end := w.D.Terminate() == 1 // end_of_slice_segment_flag
 		ts++
 		if end {
+			ps.lastQpY = w.lastQpY
 			if pps.DependentSlicesEnabled {
 				ps.ds = w.M
 			}
