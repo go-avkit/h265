@@ -433,7 +433,12 @@ func TestCodingUnitSyntax(t *testing.T) {
 			gotTree = append(gotTree, int(w.D.Bypass()))
 			return nil
 		}
-		dec := CodingUnitDecoder(tree, func(cu *CodingUnit) { got = append(got, *cu) })
+		inner := CodingUnitDecoder(tree, func(cu *CodingUnit) { got = append(got, *cu) })
+		var states [][4]uint64
+		dec := func(w *SliceWalker, x0, y0, log2 int) error {
+			states = append(states, w.D.State())
+			return inner(w, x0, y0, log2)
+		}
 		for si, p := range plans {
 			payload, hdr := ww.writeSegment(p)
 			if err := DecodeSliceData(ps, Unit{Type: UnitTrailR, Payload: payload}, hdr, ww.pps, dec); err != nil {
@@ -445,6 +450,7 @@ func TestCodingUnitSyntax(t *testing.T) {
 				if n < len(ww.expect) {
 					next = ww.expect[n]
 				}
+				t.Logf("engine states at each unit start (rng val n pos): %v", states)
 				t.Fatalf("iter %d segment %d of %d: %v\nentry points %v data offset %d\npayload %x\n%d units decoded\nlast decoded %+v\nnext written %+v\ntree bins %v written %v",
 					iter, si, len(plans), err, hdr.EntryPoints, hdr.DataOffset, payload, n, last, next, gotTree, ww.treeBits)
 			}
