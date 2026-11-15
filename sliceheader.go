@@ -17,6 +17,10 @@ type SliceHeader struct {
 	// SegmentAddress is slice_segment_address, in CTBs in raster scan; 0 for the
 	// first segment of a picture.
 	SegmentAddress uint32
+	// SliceAddrRs is the address of the first coding tree block of the SLICE the
+	// segment belongs to: its own for an independent segment, the one before's
+	// for a dependent one (7.4.7.1). 6.4.1 compares it to tell slices apart.
+	SliceAddrRs uint32
 
 	// Type is slice_type. PicOutput is pic_output_flag (1 when absent) and
 	// ColourPlaneID colour_plane_id.
@@ -121,6 +125,8 @@ func ParseSliceSegmentHeaderFull(u Unit, sps SPS, pps PPS, prev *SliceHeader) (S
 		h.EntryPoints, h.DataOffset = nil, 0
 	} else if err := readIndependentFields(r, u, sps, pps, &h); err != nil {
 		return h, err
+	} else {
+		h.SliceAddrRs = h.SegmentAddress
 	}
 
 	if err := readEntryPoints(r, sps, pps, &h); err != nil {
