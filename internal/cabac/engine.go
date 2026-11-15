@@ -53,6 +53,29 @@ type Decoder struct {
 	rng  uint32 // ivlCurrRange, 256..510 between bins
 }
 
+// ErrBypassAlignment is returned by Start when cabac_bypass_alignment_enabled_flag
+// is set: the alignment of 9.3.4.3.6 (ivlCurrRange forced to 256) can leave
+// ivlOffset at or above ivlCurrRange, which the one-division bypass run does not
+// allow for, so the stream is refused rather than decoded wrongly. The flag must
+// be 1 in the High Throughput 4:4:4 16 Intra profile of Annex A.
+var ErrBypassAlignment = errors.New("cabac: cabac_bypass_alignment_enabled_flag is not supported")
+
+// Config is what the SPS tells the engine about the entropy coding.
+type Config struct {
+	// BypassAlignment is cabac_bypass_alignment_enabled_flag
+	// (sps_range_extension).
+	BypassAlignment bool
+}
+
+// Start is Init for a stream whose SPS says how the entropy coding is set up:
+// it refuses what the engine cannot decode exactly.
+func (d *Decoder) Start(data []byte, cfg Config) error {
+	if cfg.BypassAlignment {
+		return ErrBypassAlignment
+	}
+	return d.Init(data)
+}
+
 // Init is the initialisation of the arithmetic decoding engine, clause 9.3.2.6:
 // ivlCurrRange is 510 and ivlOffset the first nine bits of data. Data that ends
 // early reads as zero bits and is reported by Overrun.

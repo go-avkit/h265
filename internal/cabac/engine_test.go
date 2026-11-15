@@ -178,6 +178,16 @@ func TestEveryFirstOffsetAndEveryContext(t *testing.T) {
 	}
 }
 
+func TestStartRefusesBypassAlignment(t *testing.T) {
+	var d Decoder
+	if err := d.Start([]byte{0, 0, 0}, Config{BypassAlignment: true}); err != ErrBypassAlignment {
+		t.Errorf("Start with alignment: %v", err)
+	}
+	if err := d.Start([]byte{0, 0, 0}, Config{}); err != nil {
+		t.Errorf("Start without: %v", err)
+	}
+}
+
 func TestInitRefusesOffsets510And511(t *testing.T) {
 	for _, data := range [][]byte{{0xFF, 0x80}, {0xFF, 0x00}, {0xFF, 0xFF, 0xFF}} {
 		var d Decoder

@@ -58,10 +58,17 @@ or typed table vs parsed table), not by a crash:
 6. the single-bypass mask inverted;
 7. DecodeTerminate's comparison `>=` to `>`.
 
+## Speed
+
+The benchmarks (`bench_test.go`) compare the engine with this package's own
+bit-serial reference only. They are not a performance claim against any other
+decoder; that comparison (FFmpeg, libde265) comes with the slice-data PR.
+
 ## Scope and open points
 
 * `cabac_bypass_alignment_enabled_flag` (9.3.4.3.6, ivlCurrRange set to 256) is
-  not implemented: it changes ivlCurrRange without touching ivlOffset, and
+  refused: `Start` returns `ErrBypassAlignment` when told the flag is set
+  (ParseSPS does not yet read sps_range_extension; go-avkit/h265#32). It changes ivlCurrRange without touching ivlOffset, and
   whether ivlOffset then stays below it is a property of the encoder that the
   one-division bypass run would have to be told about. It belongs to the high
   throughput profiles, outside the design's target.
