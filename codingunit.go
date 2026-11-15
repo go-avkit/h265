@@ -135,6 +135,7 @@ func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc,
 	w.setIntraMode(x0, y0, nCbS, 1) // INTRA_DC unless an intra prediction block says otherwise
 	if skip {
 		cu.Mode, cu.Part, cu.NumPU = ModeSkip, Part2Nx2N, 1
+		w.setCuMode(x0, y0, nCbS, ModeSkip)
 		// prediction_unit( ) of a skipped coding unit states only merge_idx.
 		cu.PU[0] = PredictionUnit{X: x0, Y: y0, W: nCbS, H: nCbS, Merge: true}
 		w.mergeIndex(&cu.PU[0])
@@ -147,6 +148,7 @@ func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc,
 	if w.Hdr.Type != SliceI && !w.decision(cabac.CtxPredMode) {
 		cu.Mode = ModeInter
 	}
+	w.setCuMode(x0, y0, nCbS, cu.Mode)
 	if cu.Mode != ModeIntra || log2CbSize == int(s.Log2MinCbSize) {
 		cu.Part = w.partMode(cu.Mode == ModeIntra, log2CbSize)
 	}
@@ -587,5 +589,15 @@ func (w *SliceWalker) deriveIntraModes(cu *CodingUnit) {
 			idx = mode422[idx]
 		}
 		cu.IntraPredModeC[i] = idx
+	}
+}
+
+func (w *SliceWalker) setCuMode(x0, y0, size int, mode PredMode) {
+	s := &w.SPS
+	m := uint(s.Log2MinCbSize)
+	for y := y0 >> m; y < min((y0+size)>>m, (int(s.CodedHeight)+1<<m-1)>>m); y++ {
+		for x := x0 >> m; x < min((x0+size)>>m, w.Pic.MinCbWidth); x++ {
+			w.Pic.CuMode[y*w.Pic.MinCbWidth+x] = uint8(mode)
+		}
 	}
 }
