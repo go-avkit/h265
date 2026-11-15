@@ -29,7 +29,8 @@ func TestIntraPicturesOfTheConformanceSuiteMatchTheirHashes(t *testing.T) {
 		var pic *PictureState
 		var frame *DecodedPicture
 		var curSPS SPS
-		allI, filtersOff, ok, have := true, true, true, false
+		var curPPS PPS
+		allI, saoOff, ok, have, deblocked := true, true, true, false, false
 		n := 0
 		for _, u := range list {
 			switch {
@@ -73,15 +74,15 @@ func TestIntraPicturesOfTheConformanceSuiteMatchTheirHashes(t *testing.T) {
 					layouts[key] = l
 				}
 				if first || pic == nil {
-					pic, frame, curSPS = NewPictureState(sps, l), NewDecodedPicture(sps), sps
-					allI, filtersOff, ok, have = true, true, true, true
+					pic, frame, curSPS, curPPS = NewPictureState(sps, l), NewDecodedPicture(sps), sps, pps
+					allI, saoOff, ok, have, deblocked = true, true, true, true, false
 					n++
 				}
 				if h.Type != SliceI {
 					allI = false
 				}
-				if !h.DeblockingDisabled || h.Refs.SAOLuma || h.Refs.SAOChroma {
-					filtersOff = false
+				if h.Refs.SAOLuma || h.Refs.SAOChroma {
+					saoOff = false
 				}
 				if !allI || !ok {
 					continue
@@ -103,10 +104,14 @@ func TestIntraPicturesOfTheConformanceSuiteMatchTheirHashes(t *testing.T) {
 					if err != nil || !valid {
 						continue
 					}
+					if allI && ok && !deblocked {
+						pic.Deblock(frame, curSPS, curPPS)
+						deblocked = true
+					}
 					switch {
 					case !allI || !ok:
 						skippedPics++
-					case !filtersOff:
+					case !saoOff:
 						unfiltered++
 					default:
 						if err := hash.Verify(frame); err != nil {

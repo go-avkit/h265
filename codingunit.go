@@ -116,6 +116,8 @@ func (w *SliceWalker) decision(ctx int) bool { return w.D.Decision(&w.M.Ctx[ctx]
 func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc, report func(*CodingUnit)) error {
 	s := &w.SPS
 	cu := &CodingUnit{X: x0, Y: y0, Log2Size: log2CbSize}
+	w.curCU = cu
+	w.beginDeblockCU(x0, y0)
 	if w.PPS.TransquantBypass {
 		cu.TransquantBypass = w.decision(cabac.CtxCUTransquantBypass)
 	}
@@ -139,6 +141,7 @@ func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc,
 		// prediction_unit( ) of a skipped coding unit states only merge_idx.
 		cu.PU[0] = PredictionUnit{X: x0, Y: y0, W: nCbS, H: nCbS, Merge: true}
 		w.mergeIndex(&cu.PU[0])
+		w.markTBTree(cu, x0, y0, log2CbSize, 0)
 		if report != nil {
 			report(cu)
 		}
@@ -169,6 +172,7 @@ func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc,
 		if err := w.interUnits(cu, x0, y0, nCbS); err != nil {
 			return err
 		}
+		w.markPUEdges(cu)
 	}
 	cu.RqtRootCbf = true
 	if !cu.PCM {
@@ -195,6 +199,7 @@ func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc,
 		}
 		return tree(w, cu)
 	}
+	w.markTBTree(cu, x0, y0, log2CbSize, 0)
 	return nil
 }
 

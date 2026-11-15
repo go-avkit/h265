@@ -57,6 +57,9 @@ func (w *SliceWalker) chromaQP(qpY int32, cIdx int) int32 {
 func (w *SliceWalker) endCodingUnit(x0, y0, log2CbSize int) {
 	q := w.qpY()
 	w.lastQpY = q
+	if cu := w.curCU; (cu.PCM && w.SPS.PCM.LoopFilterDisabled) || cu.TransquantBypass {
+		w.setNoFilter(x0, y0, log2CbSize)
+	}
 	s := &w.SPS
 	size := 1 << uint(log2CbSize)
 	m := uint(s.Log2MinCbSize)

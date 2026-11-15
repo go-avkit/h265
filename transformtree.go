@@ -148,6 +148,10 @@ func (w *SliceWalker) transformUnit(cu *CodingUnit, fn TransformUnitFunc, x0, y0
 	if small {
 		cb, cr = parentCb, parentCr
 	}
+	w.markTB(cu, x0, y0, log2)
+	if cbfLuma {
+		w.setCbf(x0, y0, log2)
+	}
 	tu := TransformUnit{X0: x0, Y0: y0, XBase: xBase, YBase: yBase, Log2Size: log2, Depth: depth, BlkIdx: blkIdx,
 		CbfLuma: cbfLuma, CbfCb: cb, CbfCr: cr, Blocks: w.tuBlocks[:0]}
 	cbfChroma := cb[0] || cr[0] || (cat == 2 && (cb[1] || cr[1]))

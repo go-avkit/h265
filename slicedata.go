@@ -50,6 +50,17 @@ type PictureState struct {
 	IntraWidth int
 	// CuMode is CuPredMode (a PredMode) on the same grid.
 	CuMode []uint8
+	// The maps of the deblocking filter (deblock.go): the edges found, vertical and
+	// horizontal, and whether a luma transform block holds coefficients, on the 4x4
+	// grid Edge4W wide; the coding units whose samples the filters leave alone; the
+	// slice's beta and tc offsets per CTB; and the motion of each 4x4 block, nil
+	// until inter prediction fills it.
+	Edge4W       int
+	EdgeV, EdgeH []uint8
+	Cbf4         []bool
+	NoFilter     []bool
+	DbBeta, DbTc []int8
+	Motion       []Motion
 	// QpY is QpY of each coding unit on the grid of CtDepth; lastQpY is the QpY of
 	// the last coding unit decoded, which a dependent slice segment continues from.
 	QpY     []int8
@@ -71,6 +82,7 @@ func NewPictureState(sps SPS, l *CtbLayout) *PictureState {
 	ps.CuSkip = make([]bool, len(ps.CtDepth))
 	ps.QpY = make([]int8, len(ps.CtDepth))
 	ps.CuMode = make([]uint8, len(ps.CtDepth))
+	ps.initDeblocking(sps)
 	ps.IntraWidth = (int(sps.CodedWidth) + 3) >> 2
 	ps.IntraMode = make([]uint8, ps.IntraWidth*((int(sps.CodedHeight)+3)>>2))
 	return ps
@@ -104,6 +116,10 @@ type SliceWalker struct {
 	// lastQpY is the QpY of the last coding unit decoded (qPY_PREV of the next
 	// quantization group); qpPred is qPY_PRED of the current one.
 	lastQpY, qpPred int32
+
+	// filterLeftCbEdgeFlag and filterTopCbEdgeFlag of the coding unit being decoded.
+	dbLeft, dbTop bool
+	curCU         *CodingUnit
 
 	// The residual blocks of the transform unit being read, and their levels.
 	tuBlocks [5]TUBlock
@@ -160,6 +176,7 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 		rs := int(l.TsToRs[ts])
 		w.ctbAddrRs = rs
 		ps.SliceAddr[rs] = int32(hdr.SliceAddrRs)
+		ps.DbBeta[rs], ps.DbTc[rs] = int8(hdr.BetaOffsetDiv2), int8(hdr.TCOffsetDiv2)
 		x0, y0 := (rs%l.WidthCtbs)<<sps.Log2CtbSize, (rs/l.WidthCtbs)<<sps.Log2CtbSize
 		firstInTile := ts == 0 || l.TileID[ts] != l.TileID[ts-1]
 		rowStart := pps.EntropySyncEnabled && (rs%l.WidthCtbs == 0 || l.TileID[ts] != l.TileID[l.RsToTs[rs-1]])
