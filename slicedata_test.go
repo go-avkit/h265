@@ -56,7 +56,15 @@ type walkWriter struct {
 	expect   []CodingUnit
 	treeBits []int
 	pcmBad   bool
-	badMvd   int // which broken abs_mvd_minus2 writeMvd writes, 0 for none
+	// imode is IntraPredModeY per 4x4 block; fullTree writes real transform trees
+	// and expectTU what the decoder must read from them; cbOff, crOff and
+	// cuQpDeltaVal are the state of delta_qp( ) and chroma_qp_offset( ).
+	imode        []uint8
+	fullTree     bool
+	expectTU     []TransformUnit
+	cbOff, crOff int32
+	cuQpDeltaVal int32
+	badMvd       int // which broken abs_mvd_minus2 writeMvd writes, 0 for none
 }
 
 // finish ends the substream in progress and returns its bytes.
@@ -190,7 +198,7 @@ func (w *walkWriter) writeQuadtree(x0, y0, log2, depth int) {
 		w.bin(cabac.CtxSplitCU+inc, b2n(split))
 	}
 	if w.pps.CUQPDeltaEnabled && log2 >= int(s.Log2CtbSize)-int(w.pps.DiffCuQPDeltaDepth) {
-		w.qpDone = false
+		w.qpDone, w.cuQpDeltaVal = false, 0
 	}
 	if w.hdr.CuChromaQPOffsetEnabled && log2 >= int(s.Log2CtbSize)-int(w.pps.Range.DiffCuChromaQPOffsetDepth) {
 		w.cqDone = false
@@ -247,6 +255,7 @@ type segPlan struct {
 func (w *walkWriter) writeSegment(p segPlan) ([]byte, SliceHeader) {
 	l := w.l
 	w.hdr = p.hdr
+	w.cbOff, w.crOff = 0, 0 // CuQpOffsetCb and CuQpOffsetCr start at 0 for each segment (7.4.7.1)
 	w.e = cabactest.New()
 	var substreams [][]byte
 	W := l.WidthCtbs
@@ -358,11 +367,11 @@ func walkCase(t *testing.T, rng *rand.Rand) (*walkWriter, *PictureState, []segPl
 		w -= (log2Min2(log2Min)) * rng.IntN(max(1, ctb/(1<<log2Min)-1))
 		h -= (log2Min2(log2Min)) * rng.IntN(max(1, ctb/(1<<log2Min)-1))
 	}
-	sizes := []uint32{uint32(log2Min - 3), uint32(diff), 0, uint32(min(diff+log2Min-2, 3)), 0, 0}
-	if log2Min+diff < 4 || sizes[3]+2 >= uint32(log2Min) {
-		sizes[3] = uint32(min(log2Min-3, 3))
-		sizes[2] = 0
-	}
+	// Transform block sizes: MinTbLog2SizeY below MinCbLog2SizeY, MaxTbLog2SizeY up to 5 and
+	// the coding tree block.
+	minTb := 2 + rng.IntN(log2Min-2)
+	maxTb := minTb + rng.IntN(min(5, log2Min+diff)-minTb+1)
+	sizes := []uint32{uint32(log2Min - 3), uint32(diff), uint32(minTb - 2), uint32(maxTb - minTb), 0, 0}
 	sps := mustSPS(t, set{chroma: []uint32{0, 1, 2, 3}[rng.IntN(4)], width: uint32(w), height: uint32(h), sao: true, sizes: sizes,
 		bdLuma: uint32(rng.IntN(5)), bdChroma: uint32(rng.IntN(5))})
 	cols, rows := 1+rng.IntN(min(wc, 3)), 1+rng.IntN(min(hc, 3))
@@ -379,7 +388,8 @@ func walkCase(t *testing.T, rng *rand.Rand) (*walkWriter, *PictureState, []segPl
 	ps := NewPictureState(sps, l)
 	ww := &walkWriter{sps: sps, pps: pps, l: l, rng: rng, cbW: ps.MinCbWidth,
 		done: make([]bool, len(ps.CtDepth)), depth: make([]int, len(ps.CtDepth)),
-		sliceOf: make([]int32, wc*hc), sao: make([]SaoParams, wc*hc), skip: make([]bool, len(ps.CtDepth))}
+		sliceOf: make([]int32, wc*hc), sao: make([]SaoParams, wc*hc), skip: make([]bool, len(ps.CtDepth)),
+		imode: make([]uint8, ps.IntraWidth*((int(sps.CodedHeight)+3)>>2))}
 	for i := range ww.sliceOf {
 		ww.sliceOf[i] = -1
 	}

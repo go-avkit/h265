@@ -311,6 +311,7 @@ func (w *walkWriter) writeCU(x0, y0, log2, depth int) {
 		w.bin(cabac.CtxCUSkip+inc, b2n(skip))
 	}
 	w.markSkip(x0, y0, n, skip)
+	w.setIMode(x0, y0, n, 1)
 	if skip {
 		cu.Mode, cu.NumPU = ModeSkip, 1
 		w.writePU(&cu, &cu.PU[0], x0, y0, n, n, depth)
@@ -338,6 +339,7 @@ func (w *walkWriter) writeCU(x0, y0, log2, depth int) {
 			w.writePCM(&cu)
 		} else {
 			w.writeIntraModes(&cu)
+			w.deriveModes(&cu)
 		}
 	} else {
 		h2 := n / 2
@@ -380,6 +382,11 @@ func (w *walkWriter) writeCU(x0, y0, log2, depth int) {
 				cu.MaxTrafoDepth = int(s.MaxTransformHierarchyDepthIntra)
 			default:
 				cu.MaxTrafoDepth = int(s.MaxTransformHierarchyDepthInter)
+			}
+			if w.fullTree {
+				w.expect = append(w.expect, cu) // the units are reported before their tree is read
+				w.writeTree(&cu, cu.X, cu.Y, cu.X, cu.Y, cu.Log2Size, 0, 0, [2]bool{}, [2]bool{})
+				return
 			}
 			bit := w.rng.IntN(2)
 			w.e.Bypass(bit)
