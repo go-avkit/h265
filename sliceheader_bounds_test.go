@@ -121,20 +121,62 @@ func TestLongTermCyclesAreBounded(t *testing.T) {
 			t.Errorf("a cycle of %d: %v", c, err)
 		}
 	}
-	// Derive with cycles that accumulate past 32 bits: no wrap into a plausible
-	// order count; the result is clamped to the range's end.
+	// Derive with cycles that accumulate past 32 bits: refused with ErrPOCRange,
+	// never wrapped into a plausible order count and never clamped (a clamped
+	// 2^31-1 could be a real picture's).
 	var entries []LongTermRef
 	for i := 0; i < 32; i++ {
 		entries = append(entries, LongTermRef{POCLSB: 5, Used: true, MSBPresent: true, DeltaMSBCycle: 1 << 24})
 	}
-	got := Derive(PictureRefs{LongTerm: entries}, 100, lt)
-	if len(got.LtCurr) != 32 {
-		t.Fatalf("%d long-term pictures", len(got.LtCurr))
+	if _, err := Derive(PictureRefs{LongTerm: entries}, 100, lt); !errors.Is(err, ErrPOCRange) {
+		t.Errorf("cycles past 32 bits: %v", err)
 	}
-	for i, p := range got.LtCurr {
-		want := max(int64(5)+100-int64(i+1)*(1<<24)*256-100%256, math.MinInt32)
-		if int64(p.POC) != want {
-			t.Errorf("entry %d: POC %d, want %d", i, p.POC, want)
+}
+
+// TestDeriveRefusesOrderCountsThatCannotBe: 8.3.1 limits PicOrderCntVal to the
+// 32-bit range and DiffPicOrderCnt( current, picture ) to -2^15..2^15-1.
+func TestDeriveRefusesOrderCountsThatCannotBe(t *testing.T) {
+	sps := SPS{Log2MaxPOCLSB: 8}
+	st := func(cur int32, deltas ...int32) PictureRefs {
+		var r PictureRefs
+		for _, d := range deltas {
+			if d < 0 {
+				r.ShortTerm.Before = append(r.ShortTerm.Before, RefPic{DeltaPOC: d, Used: true})
+			} else {
+				r.ShortTerm.After = append(r.ShortTerm.After, RefPic{DeltaPOC: d, Used: true})
+			}
 		}
+		return r
+	}
+	for name, c := range map[string]struct {
+		refs PictureRefs
+		poc  int32
+		fail bool
+	}{
+		"32768 before (diff 32768)":       {st(0, -32768), 40000, true},
+		"32767 before (diff 32767)":       {st(0, -32767), 40000, false},
+		"32768 after (diff -32768)":       {st(0, 32768), 40000, false},
+		"32769 after (diff -32769)":       {st(0, 32769), 40000, true},
+		"above the 32-bit range":          {st(0, 5), math.MaxInt32 - 4, true},
+		"the top of the range":            {st(0, 5), math.MaxInt32 - 5, false},
+		"below the 32-bit range":          {st(0, -5), math.MinInt32 + 4, true},
+		"the bottom of the range":         {st(0, -5), math.MinInt32 + 5, false},
+		"a long-term count past 2^31 - 1": {PictureRefs{LongTerm: []LongTermRef{{POCLSB: 5, Used: true, MSBPresent: true, DeltaMSBCycle: 0}}}, math.MaxInt32, false},
+		"a long-term count 2^15 away":     {PictureRefs{LongTerm: []LongTermRef{{POCLSB: 5, Used: true, MSBPresent: true, DeltaMSBCycle: 129}}}, 40000, true},
+		"a long-term count within 2^15":   {PictureRefs{LongTerm: []LongTermRef{{POCLSB: 5, Used: true, MSBPresent: true, DeltaMSBCycle: 100}}}, 40000, false},
+	} {
+		_, err := Derive(c.refs, c.poc, sps)
+		if c.fail != (err != nil) || (err != nil && !errors.Is(err, ErrPOCRange)) {
+			t.Errorf("%s: err = %v, want failure %v", name, err, c.fail)
+		}
+	}
+	// A short-term picture whose count would wrap an int32 is refused, not wrapped.
+	if _, err := Derive(st(0, 100), math.MaxInt32-50, sps); !errors.Is(err, ErrPOCRange) {
+		t.Errorf("a wrapping short-term count: %v", err)
+	}
+	// The same limits are enforced on the unused entries of the sets (Foll).
+	foll := PictureRefs{ShortTerm: ShortTermRPS{After: []RefPic{{DeltaPOC: 40000}}}}
+	if _, err := Derive(foll, 0, sps); !errors.Is(err, ErrPOCRange) {
+		t.Errorf("an unused entry 40000 away: %v", err)
 	}
 }

@@ -3,7 +3,15 @@
 
 package h265
 
-import "math"
+import (
+	"errors"
+	"fmt"
+	"math"
+)
+
+// ErrPOCRange means a slice names a picture whose order count 8.3.1 forbids: one
+// outside the 32-bit range, or more than 2^15 from the current picture's.
+var ErrPOCRange = errors.New("h265: order count out of range")
 
 // LtPicture is one long-term picture a set names.
 //
@@ -48,22 +56,41 @@ func (s RefPicSet) Count() int {
 //
 // The short-term entries are relative and become absolute here; the long-term
 // ones are already counts, or the low bits of counts.
-func Derive(refs PictureRefs, poc int32, sps SPS) RefPicSet {
+//
+// An order count that 8.3.1 forbids is refused with ErrPOCRange, never wrapped
+// or clamped (a clamped 2^31-1 could be a real picture's count): PicOrderCntVal
+// of every named picture is in -2^31 to 2^31-1, and DiffPicOrderCnt( current,
+// picture ) in -2^15 to 2^15-1 (8-4).
+func Derive(refs PictureRefs, poc int32, sps SPS) (RefPicSet, error) {
 	var out RefPicSet
+	// at is the absolute order count of a picture that is delta from the
+	// current one, checked against both limits, in 64 bits.
+	at := func(abs int64) (int32, error) {
+		if d := int64(poc) - abs; abs < math.MinInt32 || abs > math.MaxInt32 || d < -(1<<15) || d > 1<<15-1 {
+			return 0, fmt.Errorf("%w: a picture at %d from the current %d", ErrPOCRange, abs, poc)
+		}
+		return int32(abs), nil
+	}
 	for _, e := range refs.ShortTerm.Before {
-		switch {
-		case !e.Used:
-			out.StFoll = append(out.StFoll, poc+e.DeltaPOC)
-		default:
-			out.StCurrBefore = append(out.StCurrBefore, poc+e.DeltaPOC)
+		p, err := at(int64(poc) + int64(e.DeltaPOC))
+		if err != nil {
+			return RefPicSet{}, err
+		}
+		if e.Used {
+			out.StCurrBefore = append(out.StCurrBefore, p)
+		} else {
+			out.StFoll = append(out.StFoll, p)
 		}
 	}
 	for _, e := range refs.ShortTerm.After {
-		switch {
-		case !e.Used:
-			out.StFoll = append(out.StFoll, poc+e.DeltaPOC)
-		default:
-			out.StCurrAfter = append(out.StCurrAfter, poc+e.DeltaPOC)
+		p, err := at(int64(poc) + int64(e.DeltaPOC))
+		if err != nil {
+			return RefPicSet{}, err
+		}
+		if e.Used {
+			out.StCurrAfter = append(out.StCurrAfter, p)
+		} else {
+			out.StFoll = append(out.StFoll, p)
 		}
 	}
 
@@ -79,9 +106,8 @@ func Derive(refs PictureRefs, poc int32, sps SPS) RefPicSet {
 	}
 	// ⛔ In 64 bits: DeltaPocMsbCycleLt accumulates (7-52) and is multiplied by
 	// MaxPicOrderCntLsb, which overflows 32 bits long before the entries do.
-	// Each cycle is bounded as read (7.4.7.1); a picture whose order count falls
-	// outside the 32-bit range cannot exist, and is clamped to the end of the
-	// range, where nothing in the decoded picture buffer will match it.
+	// Each cycle is bounded as read (7.4.7.1); an order count outside the
+	// limits of 8.3.1 is a stream that cannot be conforming, and is refused.
 	cycle := int64(0)
 	firstStated := true
 	for i, e := range refs.LongTerm {
@@ -94,7 +120,10 @@ func Derive(refs PictureRefs, poc int32, sps SPS) RefPicSet {
 			}
 			cycle = delta
 			full := int64(e.POCLSB) + int64(poc) - delta*int64(maxLSB) - int64(lsb)
-			p.POC = int32(min(max(full, math.MinInt32), math.MaxInt32))
+			var err error
+			if p.POC, err = at(full); err != nil {
+				return RefPicSet{}, err
+			}
 			p.Exact = true
 		}
 		if !e.FromSPS {
@@ -106,5 +135,5 @@ func Derive(refs PictureRefs, poc int32, sps SPS) RefPicSet {
 			out.LtFoll = append(out.LtFoll, p)
 		}
 	}
-	return out
+	return out, nil
 }

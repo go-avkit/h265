@@ -26,7 +26,11 @@ func ExampleLists() {
 		ListEntryL0: []uint32{2, 0, 1},
 	}
 
-	set := h265.Derive(refs, 16, sps)
+	set, err := h265.Derive(refs, 16, sps)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	l0, l1, err := h265.Lists(set, refs)
 	if err != nil {
 		fmt.Println(err)

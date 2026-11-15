@@ -150,6 +150,12 @@ func ParseSliceSegmentHeaderFull(u Unit, sps SPS, pps PPS, prev *SliceHeader) (S
 		return h, r.err
 	}
 	h.DataOffset = len(u.Unescape()) - r.r.Left()/8
+	// ⚠ This compares the ESCAPED payload length with offsets that count the
+	// escaped bytes of the slice data, but DataOffset is in unescaped bytes, so
+	// the remaining length below can exceed the true one by the emulation
+	// prevention bytes in the header: the check is loose by that many bytes, and
+	// consumers keep their own bounds when they split the data.
+	//
 	// The subsets together cannot be longer than the data that follows. The NAL
 	// payload still has its emulation prevention bytes (which the offsets count),
 	// so it is at least as long as the unescaped data; a stream within that bound
