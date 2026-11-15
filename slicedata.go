@@ -41,6 +41,8 @@ type PictureState struct {
 	// scan of a grid MinCbWidth wide.
 	CtDepth    []uint8
 	MinCbWidth int
+	// CuSkip is cu_skip_flag on the same grid as CtDepth.
+	CuSkip []bool
 
 	wpp, ds cabac.Model
 }
@@ -55,6 +57,7 @@ func NewPictureState(sps SPS, l *CtbLayout) *PictureState {
 	minCb := uint(sps.Log2MinCbSize)
 	ps.MinCbWidth = (int(sps.CodedWidth) + 1<<minCb - 1) >> minCb
 	ps.CtDepth = make([]uint8, ps.MinCbWidth*((int(sps.CodedHeight)+1<<minCb-1)>>minCb))
+	ps.CuSkip = make([]bool, len(ps.CtDepth))
 	return ps
 }
 
@@ -79,6 +82,10 @@ type SliceWalker struct {
 
 	ctbAddrRs int
 	chroma    int
+	// data is the unescaped slice segment data and pos the offset in it of the
+	// substream being read, which a PCM block moves.
+	data []byte
+	pos  int
 }
 
 // Available is the derivation of 6.4.1: whether the block covering ( xN, yN ) is
@@ -120,7 +127,7 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 	n := len(l.TsToRs)
 	sub := 0 // index of the substream being read
 	base := hdr.DataOffset
-	pos := 0 // byte offset of the current substream in data
+	w.data = data // w.pos is the byte offset of the current substream in data
 	first := true
 	for {
 		rs := int(l.TsToRs[ts])
@@ -143,7 +150,7 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 			default: // the first CTU of a dependent slice segment
 				w.M = ps.ds
 			}
-			if err := w.D.Start(data[pos:], cabac.Config{}); err != nil {
+			if err := w.D.Start(data[w.pos:], cabac.Config{}); err != nil {
 				return fmt.Errorf("%w: %w", ErrSliceData, err)
 			}
 			first = false
@@ -168,8 +175,8 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 			}
 			// The terminating bin's last bit is rbsp_stop_one_bit: the rest of the
 			// data is the zero bits that finish its byte.
-			if got := int((w.D.BitPos() + 7) / 8); pos+got != len(data) {
-				return fmt.Errorf("%w: the slice ends at byte %d of %d", ErrSliceData, pos+got, len(data))
+			if got := int((w.D.BitPos() + 7) / 8); w.pos+got != len(data) {
+				return fmt.Errorf("%w: the slice ends at byte %d of %d", ErrSliceData, w.pos+got, len(data))
 			}
 			if sub != len(starts) {
 				return fmt.Errorf("%w: %d entry points but %d substreams", ErrSliceData, len(starts), sub+1)
@@ -186,12 +193,12 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 				return fmt.Errorf("%w: end_of_subset_one_bit is 0", ErrSliceData)
 			}
 			// byte_alignment( ): the bit just read is its one; zeros follow.
-			next := pos + int((w.D.BitPos()+7)/8)
+			next := w.pos + int((w.D.BitPos()+7)/8)
 			sub++
 			if sub > len(starts) || starts[sub-1] != base+next {
 				return fmt.Errorf("%w: substream %d starts at byte %d, the entry points say %v", ErrSliceData, sub, base+next, starts)
 			}
-			pos = next
+			w.pos = next
 		}
 	}
 }
