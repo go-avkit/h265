@@ -81,6 +81,10 @@ type CodingUnit struct {
 	MpmIdx               [4]uint8
 	RemIntraLumaPredMode [4]uint8
 	IntraChromaPredMode  [4]uint8
+	// IntraPredModeY and IntraPredModeC are the derived modes (8.4.2, 8.4.3) of
+	// each prediction block; without chroma partitions all four IntraPredModeC are
+	// the first.
+	IntraPredModeY, IntraPredModeC [4]uint8
 	// RqtRootCbf is rqt_root_cbf (1 when absent); IntraSplit is IntraSplitFlag and
 	// MaxTrafoDepth the depth the transform tree may reach.
 	RqtRootCbf    bool
@@ -124,6 +128,7 @@ func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc,
 		skip = w.decision(cabac.CtxCUSkip + inc)
 	}
 	w.setSkip(x0, y0, nCbS, skip)
+	w.setIntraMode(x0, y0, nCbS, 1) // INTRA_DC unless an intra prediction block says otherwise
 	if skip {
 		cu.Mode, cu.Part, cu.NumPU = ModeSkip, Part2Nx2N, 1
 		// prediction_unit( ) of a skipped coding unit states only merge_idx.
@@ -152,6 +157,7 @@ func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc,
 			}
 		} else {
 			w.intraModes(cu)
+			w.deriveIntraModes(cu)
 		}
 	} else {
 		if err := w.interUnits(cu, x0, y0, nCbS); err != nil {
@@ -478,4 +484,104 @@ func (w *SliceWalker) mvd(out *[2]int32) error {
 		}
 	}
 	return nil
+}
+
+func (w *SliceWalker) setIntraMode(x0, y0, size int, mode uint8) {
+	s := &w.SPS
+	for y := y0 >> 2; y < min((y0+size+3)>>2, (int(s.CodedHeight)+3)>>2); y++ {
+		for x := x0 >> 2; x < min((x0+size+3)>>2, w.Pic.IntraWidth); x++ {
+			w.Pic.IntraMode[y*w.Pic.IntraWidth+x] = mode
+		}
+	}
+}
+
+// chromaModeIdx is Table 8-2 (modeIdx) from intra_chroma_pred_mode and IntraPredModeY.
+func chromaModeIdx(chroma, luma uint8) uint8 {
+	if chroma == 4 {
+		return luma
+	}
+	base := [4]uint8{0, 26, 10, 1}[chroma]
+	if base == luma {
+		return 34
+	}
+	return base
+}
+
+// mode422 is Table 8-3: IntraPredModeC for ChromaArrayType 2 from modeIdx.
+var mode422 = [35]uint8{
+	0, 1, 2, 2, 2, 2, 3, 5, 7, 8, 10, 12, 13, 15, 17, 18, 19, 20,
+	21, 22, 23, 23, 24, 24, 25, 25, 26, 27, 27, 28, 28, 29, 29, 30, 31,
+}
+
+// deriveIntraModes is 8.4.2 and 8.4.3 for the prediction blocks of an intra
+// coding unit that is not PCM.
+func (w *SliceWalker) deriveIntraModes(cu *CodingUnit) {
+	n, size := 1, 1<<cu.Log2Size
+	if cu.Part == PartNxN {
+		n, size = 4, size/2
+	}
+	ctbLog2 := uint(w.SPS.Log2CtbSize)
+	for i := 0; i < n; i++ {
+		xPb, yPb := cu.X+(i&1)*size, cu.Y+(i>>1)*size
+		cand := func(xN, yN int, above bool) uint8 {
+			if !w.Available(xPb, yPb, xN, yN) || (above && yPb-1 < (yPb>>ctbLog2)<<ctbLog2) {
+				return 1
+			}
+			return w.Pic.IntraMode[(yN>>2)*w.Pic.IntraWidth+xN>>2]
+		}
+		a, b := cand(xPb-1, yPb, false), cand(xPb, yPb-1, true)
+		var list [3]int
+		switch {
+		case a == b && a < 2:
+			list = [3]int{0, 1, 26}
+		case a == b:
+			list = [3]int{int(a), 2 + (int(a)+29)%32, 2 + (int(a)-2+1)%32}
+		default:
+			list[0], list[1] = int(a), int(b)
+			switch {
+			case list[0] != 0 && list[1] != 0:
+				list[2] = 0
+			case list[0] != 1 && list[1] != 1:
+				list[2] = 1
+			default:
+				list[2] = 26
+			}
+		}
+		var mode int
+		if cu.PrevIntraLumaPred[i] {
+			mode = list[cu.MpmIdx[i]]
+		} else {
+			if list[0] > list[1] {
+				list[0], list[1] = list[1], list[0]
+			}
+			if list[0] > list[2] {
+				list[0], list[2] = list[2], list[0]
+			}
+			if list[1] > list[2] {
+				list[1], list[2] = list[2], list[1]
+			}
+			mode = int(cu.RemIntraLumaPredMode[i])
+			for _, c := range list {
+				if mode >= c {
+					mode++
+				}
+			}
+		}
+		cu.IntraPredModeY[i] = uint8(mode)
+		w.setIntraMode(xPb, yPb, size, uint8(mode))
+	}
+	if w.chroma == 0 {
+		return
+	}
+	for i := 0; i < 4; i++ {
+		src := 0
+		if w.chroma == 3 {
+			src = i % n
+		}
+		idx := chromaModeIdx(cu.IntraChromaPredMode[src], cu.IntraPredModeY[src])
+		if w.chroma == 2 {
+			idx = mode422[idx]
+		}
+		cu.IntraPredModeC[i] = idx
+	}
 }

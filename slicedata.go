@@ -43,6 +43,11 @@ type PictureState struct {
 	MinCbWidth int
 	// CuSkip is cu_skip_flag on the same grid as CtDepth.
 	CuSkip []bool
+	// IntraMode is IntraPredModeY per 4x4 luma block, raster scan of a grid
+	// IntraWidth wide; INTRA_DC (1) for blocks of coding units that are not
+	// intra or are PCM, which is what 8.4.2 takes a neighbour's mode to be.
+	IntraMode  []uint8
+	IntraWidth int
 
 	wpp, ds cabac.Model
 }
@@ -58,6 +63,8 @@ func NewPictureState(sps SPS, l *CtbLayout) *PictureState {
 	ps.MinCbWidth = (int(sps.CodedWidth) + 1<<minCb - 1) >> minCb
 	ps.CtDepth = make([]uint8, ps.MinCbWidth*((int(sps.CodedHeight)+1<<minCb-1)>>minCb))
 	ps.CuSkip = make([]bool, len(ps.CtDepth))
+	ps.IntraWidth = (int(sps.CodedWidth) + 3) >> 2
+	ps.IntraMode = make([]uint8, ps.IntraWidth*((int(sps.CodedHeight)+3)>>2))
 	return ps
 }
 
@@ -82,6 +89,14 @@ type SliceWalker struct {
 
 	ctbAddrRs int
 	chroma    int
+	// CuQpOffsetCb and CuQpOffsetCr are set by chroma_qp_offset( ) (7.4.9.15); they
+	// start at 0 for each slice segment (7.4.7.1).
+	CuQpOffsetCb, CuQpOffsetCr int32
+
+	// The residual blocks of the transform unit being read, and their levels.
+	tuBlocks [5]TUBlock
+	levels   [5][1 << 10]int32
+
 	// data is the unescaped slice segment data and pos the offset in it of the
 	// substream being read, which a PCM block moves.
 	data []byte
