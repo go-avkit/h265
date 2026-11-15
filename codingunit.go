@@ -101,7 +101,11 @@ type TransformTreeFunc func(w *SliceWalker, cu *CodingUnit) error
 // coding unit once its syntax has been read, before the transform tree.
 func CodingUnitDecoder(tree TransformTreeFunc, cu func(*CodingUnit)) CodingUnitFunc {
 	return func(w *SliceWalker, x0, y0, log2CbSize int) error {
-		return w.codingUnit(x0, y0, log2CbSize, tree, cu)
+		if err := w.codingUnit(x0, y0, log2CbSize, tree, cu); err != nil {
+			return err
+		}
+		w.endCodingUnit(x0, y0, log2CbSize)
+		return nil
 	}
 }
 

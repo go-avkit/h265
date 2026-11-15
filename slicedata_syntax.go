@@ -114,8 +114,11 @@ func (w *SliceWalker) quadtree(x0, y0, log2CbSize, cqtDepth int) error {
 		}
 		split = w.D.Decision(&w.M.Ctx[cabac.CtxSplitCU+inc]) == 1
 	}
-	if w.PPS.CUQPDeltaEnabled && log2CbSize >= int(s.Log2CtbSize)-int(w.PPS.DiffCuQPDeltaDepth) {
-		w.IsCuQpDeltaCoded, w.CuQpDeltaVal = false, 0
+	if log2CbSize >= int(s.Log2CtbSize)-int(w.PPS.DiffCuQPDeltaDepth) {
+		w.startQuantizationGroup(x0, y0)
+		if w.PPS.CUQPDeltaEnabled {
+			w.IsCuQpDeltaCoded, w.CuQpDeltaVal = false, 0
+		}
 	}
 	if w.Hdr.CuChromaQPOffsetEnabled && log2CbSize >= int(s.Log2CtbSize)-int(w.PPS.Range.DiffCuChromaQPOffsetDepth) {
 		w.IsCuChromaQpOffsetCoded = false

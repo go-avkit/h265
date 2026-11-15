@@ -332,6 +332,11 @@ func (w *walkWriter) writeTree(cu *CodingUnit, x0, y0, xBase, yBase, log2, depth
 		}
 	}
 	tu.QpDelta, tu.CuQpOffsetCb, tu.CuQpOffsetCr = w.cuQpDeltaVal, w.cbOff, w.crOff
+	tu.QpY = w.qpYw()
+	tu.QpPrime[0] = tu.QpY + 6*(int32(w.sps.BitDepthLuma)-8)
+	if cat != 0 {
+		tu.QpPrime[1], tu.QpPrime[2] = w.qpChroma(1, tu.QpY), w.qpChroma(2, tu.QpY)
+	}
 	w.expectTU = append(w.expectTU, tu)
 }
 
@@ -579,5 +584,66 @@ func TestDeltaQPSuffixRefused(t *testing.T) {
 	}
 	if err := w.deltaQP(); !errors.Is(err, ErrSliceData) {
 		t.Errorf("an endless cu_qp_delta_abs: %v", err)
+	}
+}
+
+// The writer's quantization parameters (8.6.1). qPY_PRED is taken from the groups
+// to the left and above only when they are in the same coding tree block, which is
+// decided here by comparing block coordinates, not CTB addresses.
+func (w *walkWriter) startQG(xQg, yQg int) {
+	ctb := uint(w.sps.Log2CtbSize)
+	nb := func(xn, yn int) int32 {
+		sameCTB := xn>>ctb == xQg>>ctb && yn>>ctb == yQg>>ctb
+		if !sameCTB || !w.avail([2]int{xQg, yQg}, [2]int{xn, yn}) {
+			return w.lastQp
+		}
+		return w.qpMap[w.cell(xn, yn)]
+	}
+	w.qpPred = (nb(xQg-1, yQg) + nb(xQg, yQg-1) + 1) >> 1 // an arithmetic shift: the sum may be negative
+}
+
+func (w *walkWriter) qpYw() int32 {
+	off := 6 * (int32(w.sps.BitDepthLuma) - 8)
+	v := w.qpPred + w.cuQpDeltaVal + 52 + 2*off
+	return v%(52+off) - off
+}
+
+// qpChroma is Qp'Cb or Qp'Cr for the component c (1 or 2), Table 8-10 as ranges.
+func (w *walkWriter) qpChroma(c int, qpY int32) int32 {
+	off := 6 * (int32(w.sps.BitDepthChroma) - 8)
+	delta := w.pps.CbQPOffset + w.hdr.CbQPOffset + w.cbOff
+	if c == 2 {
+		delta = w.pps.CrQPOffset + w.hdr.CrQPOffset + w.crOff
+	}
+	qPi := qpY + delta
+	if qPi < -off {
+		qPi = -off
+	}
+	if qPi > 57 {
+		qPi = 57
+	}
+	qPc := qPi
+	if w.sps.ChromaFormat == 1 {
+		switch {
+		case qPi < 30:
+		case qPi >= 44:
+			qPc = qPi - 6
+		default:
+			qPc = []int32{29, 30, 31, 32, 33, 33, 34, 34, 35, 35, 36, 36, 37, 37}[qPi-30]
+		}
+	} else if qPc > 51 {
+		qPc = 51
+	}
+	return qPc + off
+}
+
+func (w *walkWriter) endCU(x0, y0, log2 int) {
+	q := w.qpYw()
+	w.lastQp = q
+	n := 1 << log2
+	for y := y0; y < min(y0+n, int(w.sps.CodedHeight)); y += 1 << w.sps.Log2MinCbSize {
+		for x := x0; x < min(x0+n, int(w.sps.CodedWidth)); x += 1 << w.sps.Log2MinCbSize {
+			w.qpMap[w.cell(x, y)] = q
+		}
 	}
 }

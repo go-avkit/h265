@@ -79,6 +79,10 @@ func TestEverySliceDataOfTheConformanceSuiteEndsOnItsLastBit(t *testing.T) {
 				var cuCount, tuCount, blockCount, pcmCount int
 				dec := CodingUnitDecoder(TransformTreeDecoder(func(w *SliceWalker, cu *CodingUnit, tu *TransformUnit) error {
 					tuCount++
+					// 8.6.1: QpY lies in -QpBdOffsetY..51, and the chroma qP above 0.
+					if bd := 6 * (int32(sps.BitDepthLuma) - 8); tu.QpY < -bd || tu.QpY > 51 || tu.QpPrime[0] < 0 || tu.QpPrime[1] < 0 || tu.QpPrime[2] < 0 {
+						t.Errorf("%s: slice %d: QpY %d, Qp' %v", rel, n, tu.QpY, tu.QpPrime)
+					}
 					blockCount += len(tu.Blocks)
 					return nil
 				}), func(cu *CodingUnit) {

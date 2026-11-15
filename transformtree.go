@@ -31,6 +31,10 @@ type TransformUnit struct {
 	// offsets in force when the unit was read.
 	QpDelta                    int32
 	CuQpOffsetCb, CuQpOffsetCr int32
+	// QpY is QpY of the coding unit (8.6.1) and QpPrime Qp'Y, Qp'Cb and Qp'Cr, the
+	// qP the scaling of the unit's blocks uses; the chroma ones are 0 without chroma.
+	QpY     int32
+	QpPrime [3]int32
 	// ResScaleVal is ResScaleVal[ 1 ] and [ 2 ] of cross-component prediction
 	// (7-79, 7-80), 0 when absent.
 	ResScaleVal [2]int32
@@ -218,6 +222,11 @@ func (w *SliceWalker) transformUnit(cu *CodingUnit, fn TransformUnitFunc, x0, y0
 		}
 	}
 	tu.QpDelta, tu.CuQpOffsetCb, tu.CuQpOffsetCr = w.CuQpDeltaVal, w.CuQpOffsetCb, w.CuQpOffsetCr
+	tu.QpY = w.qpY()
+	tu.QpPrime[0] = tu.QpY + w.qpBdOffsetY()
+	if cat != 0 {
+		tu.QpPrime[1], tu.QpPrime[2] = w.chromaQP(tu.QpY, 1), w.chromaQP(tu.QpY, 2)
+	}
 	if fn != nil {
 		return fn(w, cu, &tu)
 	}
