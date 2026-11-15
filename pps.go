@@ -63,7 +63,41 @@ type PPS struct {
 	TCOffsetDiv2           int32
 	ListsModification      bool
 	SliceHeaderExtension   bool
+
+	// DiffCuQPDeltaDepth is diff_cu_qp_delta_depth: Log2MinCuQpDeltaSize is the
+	// SPS's CtbLog2SizeY less it (7-36). Zero when cu_qp_delta is not enabled.
+	DiffCuQPDeltaDepth uint8
+	// ColumnWidthMinus1 and RowHeightMinus1 are the stated tile sizes, in
+	// coding tree blocks, one fewer than the tile count when spacing is not
+	// uniform; the last column and row are what is left.
+	ColumnWidthMinus1, RowHeightMinus1 []uint32
+	LoopFilterAcrossTiles              bool
+	LoopFilterAcrossSlices             bool
+	ScalingListPresent                 bool
+	// Log2ParMrgLevel is Log2ParMrgLevel (7-37): log2_parallel_merge_level_minus2 + 2.
+	Log2ParMrgLevel uint8
+	// Range is pps_range_extension; its zero value is what an absent one infers.
+	Range PPSRangeExtension
 }
+
+// PPSRangeExtension is pps_range_extension (7.3.2.3.2).
+type PPSRangeExtension struct {
+	// Log2MaxTransformSkipSize is log2_max_transform_skip_block_size_minus2 + 2;
+	// 2 when absent.
+	Log2MaxTransformSkipSize       uint8
+	CrossComponentPrediction       bool
+	ChromaQPOffsetListEnabled      bool
+	DiffCuChromaQPOffsetDepth      uint8
+	CbQPOffsetList, CrQPOffsetList []int32
+	Log2SAOOffsetScaleLuma         uint8
+	Log2SAOOffsetScaleChroma       uint8
+}
+
+// maxTiles is a bound on tile columns and rows that holds before the SPS is
+// known (7.4.3.3 limits them to the picture's size in coding tree blocks, which
+// the slice header step checks); it keeps a few bytes from asking for a loop of
+// four billion.
+const maxTiles = 1024
 
 // ParsePPS reads a picture parameter set.
 //
@@ -95,15 +129,27 @@ func ParsePPS(u Unit) (PPS, error) {
 		return PPS{}, fmt.Errorf("%w: %d and %d", ErrRefIdxRange, l0, l1)
 	}
 	p.NumRefIdxL0, p.NumRefIdxL1 = l0+1, l1+1
-	p.InitQP = r.se() + 26
+	initQP := r.se()
+	// 7.4.3.3: -( 26 + QpBdOffsetY ) to +25; QpBdOffsetY is at most 48.
+	if r.err == nil && (initQP < -74 || initQP > 25) {
+		return PPS{}, fmt.Errorf("%w: init_qp_minus26 of %d", ErrUnsupportedPPS, initQP)
+	}
+	p.InitQP = initQP + 26
 	p.ConstrainedIntraPred = r.flag()
 	p.TransformSkip = r.flag()
 	p.CUQPDeltaEnabled = r.flag()
 	if p.CUQPDeltaEnabled {
-		r.ue() // diff_cu_qp_delta_depth
+		d := r.ue() // diff_cu_qp_delta_depth: at most log2_diff_max_min_luma_coding_block_size, 3
+		if r.err == nil && d > 3 {
+			return PPS{}, fmt.Errorf("%w: diff_cu_qp_delta_depth of %d", ErrUnsupportedPPS, d)
+		}
+		p.DiffCuQPDeltaDepth = uint8(d)
 	}
 	p.CbQPOffset = r.se()
 	p.CrQPOffset = r.se()
+	if r.err == nil && (p.CbQPOffset < -12 || p.CbQPOffset > 12 || p.CrQPOffset < -12 || p.CrQPOffset > 12) {
+		return PPS{}, fmt.Errorf("%w: chroma QP offsets %d and %d", ErrUnsupportedPPS, p.CbQPOffset, p.CrQPOffset)
+	}
 	p.SliceChromaQPOffsets = r.flag()
 	p.WeightedPred = r.flag()
 	p.WeightedBipred = r.flag()
@@ -113,8 +159,11 @@ func ParsePPS(u Unit) (PPS, error) {
 
 	p.TileColumns, p.TileRows = 1, 1
 	if p.TilesEnabled {
-		p.TileColumns = r.ue() + 1
-		p.TileRows = r.ue() + 1
+		cols, rows := r.ue(), r.ue() // minus 1; bounded before the +1 can wrap
+		if r.err == nil && (cols >= maxTiles || rows >= maxTiles) {
+			return PPS{}, fmt.Errorf("%w: %d tile columns and %d rows", ErrUnsupportedPPS, uint64(cols)+1, uint64(rows)+1)
+		}
+		p.TileColumns, p.TileRows = cols+1, rows+1
 		p.UniformTileSpacing = r.flag()
 		if !p.UniformTileSpacing {
 			// ⛔ One width per column and one height per row, each one LESS the
@@ -122,15 +171,15 @@ func ParsePPS(u Unit) (PPS, error) {
 			// stated. Reading one too many would take the flag that follows as a
 			// width, and everything after it from the wrong bits.
 			for i := uint32(1); i < p.TileColumns; i++ {
-				r.ue()
+				p.ColumnWidthMinus1 = append(p.ColumnWidthMinus1, r.ue())
 			}
 			for i := uint32(1); i < p.TileRows; i++ {
-				r.ue()
+				p.RowHeightMinus1 = append(p.RowHeightMinus1, r.ue())
 			}
 		}
-		r.flag() // loop_filter_across_tiles_enabled_flag
+		p.LoopFilterAcrossTiles = r.flag()
 	}
-	r.flag() // pps_loop_filter_across_slices_enabled_flag
+	p.LoopFilterAcrossSlices = r.flag()
 
 	if r.flag() { // deblocking_filter_control_present_flag
 		p.DeblockingOverride = r.flag()
@@ -140,17 +189,19 @@ func ParsePPS(u Unit) (PPS, error) {
 			p.TCOffsetDiv2 = r.se()
 		}
 	}
-	if r.flag() { // pps_scaling_list_data_present_flag
+	if p.ScalingListPresent = r.flag(); p.ScalingListPresent { // pps_scaling_list_data_present_flag
 		skipScalingListData(r)
 	}
 	p.ListsModification = r.flag()
-	r.ue() // log2_parallel_merge_level_minus2
+	merge := r.ue() // log2_parallel_merge_level_minus2: at most CtbLog2SizeY - 2, 4
+	if r.err == nil && merge > 4 {
+		return PPS{}, fmt.Errorf("%w: log2_parallel_merge_level_minus2 of %d", ErrUnsupportedPPS, merge)
+	}
+	p.Log2ParMrgLevel = uint8(merge) + 2
 	p.SliceHeaderExtension = r.flag()
-	if r.flag() { // pps_extension_present_flag
-		// Four named extension flags and four reserved bits. Whatever they turn
-		// on is not read here, so a set that states any of them is refused by the
-		// check below rather than half-read.
-		r.bits(8)
+	extData, err := p.readExtensions(r)
+	if err != nil {
+		return p, err
 	}
 
 	if r.err != nil {
@@ -161,11 +212,68 @@ func ParsePPS(u Unit) (PPS, error) {
 	// wrongly, and there is nothing else in a parameter set to check its values
 	// against. This identity IS the check, and it is what turns a misread scaling
 	// list from a plausible quantiser into a refusal.
-	if r.moreData() {
-		return p, fmt.Errorf("%w: %d bits left over, so a field was read wrongly",
-			ErrUnsupportedPPS, r.r.Left())
+	if !extData {
+		if r.moreData() {
+			return p, fmt.Errorf("%w: %d bits left over, so a field was read wrongly",
+				ErrUnsupportedPPS, r.r.Left())
+		}
+		if r.bit() != 1 || r.err != nil { // rbsp_stop_one_bit
+			return p, fmt.Errorf("%w: no stop bit at the end", ErrUnsupportedPPS)
+		}
 	}
 	return p, nil
+}
+
+// readExtensions reads pps_extension_present_flag and the range extension. The
+// multilayer, 3D and screen content coding extensions are refused rather than
+// skipped, as for the SPS. extData says pps_extension_4bits announced data
+// that is ignored.
+func (p *PPS) readExtensions(r *sticky) (extData bool, err error) {
+	p.Range.Log2MaxTransformSkipSize = 2
+	if !r.flag() { // pps_extension_present_flag
+		return false, nil
+	}
+	rangeExt, multilayer, ext3D, scc := r.flag(), r.flag(), r.flag(), r.flag()
+	extData = r.bits(4) != 0
+	if r.err != nil {
+		return false, r.err
+	}
+	if multilayer || ext3D || scc {
+		return false, fmt.Errorf("%w: a multilayer, 3D or screen content coding extension", ErrUnsupportedPPS)
+	}
+	if !rangeExt {
+		return extData, nil
+	}
+	x := &p.Range
+	if p.TransformSkip {
+		sz := r.ue() // log2_max_transform_skip_block_size_minus2: at most MaxTbLog2SizeY - 2, 3
+		if r.err == nil && sz > 3 {
+			return false, fmt.Errorf("%w: log2_max_transform_skip_block_size_minus2 of %d", ErrUnsupportedPPS, sz)
+		}
+		x.Log2MaxTransformSkipSize = uint8(sz) + 2
+	}
+	x.CrossComponentPrediction = r.flag()
+	if x.ChromaQPOffsetListEnabled = r.flag(); x.ChromaQPOffsetListEnabled {
+		depth, n := r.ue(), r.ue()+1 // diff_cu_chroma_qp_offset_depth, chroma_qp_offset_list_len_minus1 + 1
+		if r.err == nil && (depth > 3 || n > 6) {
+			return false, fmt.Errorf("%w: chroma QP offset list of %d at depth %d", ErrUnsupportedPPS, n, depth)
+		}
+		x.DiffCuChromaQPOffsetDepth = uint8(depth)
+		for i := uint32(0); i < n && r.err == nil; i++ {
+			cb, cr := r.se(), r.se()
+			if cb < -12 || cb > 12 || cr < -12 || cr > 12 {
+				return false, fmt.Errorf("%w: chroma QP offsets %d and %d in the list", ErrUnsupportedPPS, cb, cr)
+			}
+			x.CbQPOffsetList, x.CrQPOffsetList = append(x.CbQPOffsetList, cb), append(x.CrQPOffsetList, cr)
+		}
+	}
+	// At most Max( 0, BitDepth - 10 ), which is 6 at 16 bits.
+	luma, chroma := r.ue(), r.ue()
+	if r.err == nil && (luma > 6 || chroma > 6) {
+		return false, fmt.Errorf("%w: SAO offset scales %d and %d", ErrUnsupportedPPS, luma, chroma)
+	}
+	x.Log2SAOOffsetScaleLuma, x.Log2SAOOffsetScaleChroma = uint8(luma), uint8(chroma)
+	return extData, nil
 }
 
 // skipScalingListData consumes the scaling lists a set may carry.

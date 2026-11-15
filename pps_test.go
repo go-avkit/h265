@@ -27,6 +27,14 @@ type pset struct {
 	deblockDisabled bool
 	scalingLists    bool
 	extension       bool
+
+	// Overrides, zero meaning what the builder always wrote.
+	transformSkip bool
+	initQP        int32         // init_qp_minus26
+	diffDepth     *uint32       // diff_cu_qp_delta_depth, default 2
+	chromaOffsets *[2]int32     // pps_cb_qp_offset, pps_cr_qp_offset, default -1, 2
+	mergeMinus2   uint32        // log2_parallel_merge_level_minus2
+	ext           func(*writer) // what follows pps_extension_present_flag = 1
 }
 
 // build writes p as a NAL unit, ending it the way a payload must end.
@@ -52,19 +60,27 @@ func (p pset) build() Unit {
 		}
 		w.ue(p.refIdxMinus1)
 	}
-	w.se(0)  // init_qp_minus26
-	w.bit(0) // constrained_intra_pred
-	w.bit(0) // transform_skip
+	w.se(p.initQP) // init_qp_minus26
+	w.bit(0)       // constrained_intra_pred
+	w.flag(p.transformSkip)
 	w.flag(p.cuQPDelta)
 	if p.cuQPDelta {
-		w.ue(2) // diff_cu_qp_delta_depth
+		d := uint32(2)
+		if p.diffDepth != nil {
+			d = *p.diffDepth
+		}
+		w.ue(d) // diff_cu_qp_delta_depth
 	}
-	w.se(-1) // pps_cb_qp_offset
-	w.se(2)  // pps_cr_qp_offset
-	w.bit(0) // slice chroma qp offsets present
-	w.bit(0) // weighted_pred
-	w.bit(0) // weighted_bipred
-	w.bit(0) // transquant_bypass
+	off := [2]int32{-1, 2}
+	if p.chromaOffsets != nil {
+		off = *p.chromaOffsets
+	}
+	w.se(off[0]) // pps_cb_qp_offset
+	w.se(off[1]) // pps_cr_qp_offset
+	w.bit(0)     // slice chroma qp offsets present
+	w.bit(0)     // weighted_pred
+	w.bit(0)     // weighted_bipred
+	w.bit(0)     // transquant_bypass
 	w.flag(p.tiles)
 	w.bit(0) // entropy_coding_sync
 	if p.tiles {
@@ -124,11 +140,13 @@ func (p pset) build() Unit {
 			}
 		}
 	}
-	w.bit(1) // lists_modification_present
-	w.ue(0)  // log2_parallel_merge_level_minus2
-	w.bit(0) // slice_segment_header_extension_present
-	w.flag(p.extension)
-	if p.extension {
+	w.bit(1)            // lists_modification_present
+	w.ue(p.mergeMinus2) // log2_parallel_merge_level_minus2
+	w.bit(0)            // slice_segment_header_extension_present
+	w.flag(p.extension || p.ext != nil)
+	if p.ext != nil {
+		p.ext(w)
+	} else if p.extension {
 		w.bits(0, 8) // four named extension flags and four reserved bits
 	}
 	// rbsp_trailing_bits: a one, then zeros to the byte.
