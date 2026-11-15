@@ -82,7 +82,10 @@ func FuzzStream(f *testing.F) {
 				if err != nil {
 					continue
 				}
-				set := Derive(refs, p.Value, sps)
+				set, err := Derive(refs, p.Value, sps)
+				if err != nil {
+					continue // an order count 8.3.1 forbids is refused, which is the point
+				}
 				_ = set.Count()
 				_, _, _ = Lists(set, refs)
 			}

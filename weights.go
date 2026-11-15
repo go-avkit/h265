@@ -99,9 +99,11 @@ func readWeightList(r *sticky, w PredWeights, chroma bool, n int) ([]RefWeight, 
 		return nil, fmt.Errorf("%w: %d active references", ErrSliceHeader, n)
 	}
 	lumaFlags := r.bits(n)
+	r.elements += n - 1 // one field of n flags, n syntax elements
 	chromaFlags := uint32(0)
 	if chroma {
 		chromaFlags = r.bits(n)
+		r.elements += n - 1
 	}
 	if r.err != nil {
 		return nil, r.err

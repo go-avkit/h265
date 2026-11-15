@@ -22,7 +22,7 @@ func TestUsedAndKeptGoToDifferentLists(t *testing.T) {
 		Before: []RefPic{{-1, true}, {-2, false}, {-3, true}},
 		After:  []RefPic{{1, false}, {2, true}},
 	}}
-	got := Derive(refs, 100, SPS{Log2MaxPOCLSB: 8})
+	got := derive(t, refs, 100, SPS{Log2MaxPOCLSB: 8})
 
 	if want := []int32{99, 97}; !sameInts(got.StCurrBefore, want) {
 		t.Errorf("before = %v; want %v", got.StCurrBefore, want)
@@ -45,7 +45,7 @@ func TestALongTermPictureWithoutItsHighBitsIsNotAFullCount(t *testing.T) {
 		{POCLSB: 30, Used: true},
 		{POCLSB: 40, Used: false},
 	}}
-	got := Derive(refs, 100, SPS{Log2MaxPOCLSB: 8})
+	got := derive(t, refs, 100, SPS{Log2MaxPOCLSB: 8})
 	if len(got.LtCurr) != 1 || len(got.LtFoll) != 1 {
 		t.Fatalf("lists are %d and %d; want one each", len(got.LtCurr), len(got.LtFoll))
 	}
@@ -67,7 +67,7 @@ func TestTheHighBitsAccumulateAcrossEntries(t *testing.T) {
 		{POCLSB: 200, Used: true, MSBPresent: true, DeltaMSBCycle: 1},
 		{POCLSB: 200, Used: true, MSBPresent: true, DeltaMSBCycle: 1},
 	}}
-	got := Derive(refs, poc, sps)
+	got := derive(t, refs, poc, sps)
 	if want := []int32{-56, -312}; !sameInts(ltPOCs(got.LtCurr), want) {
 		t.Errorf("counts = %v; want %v -- the wraps did not accumulate",
 			ltPOCs(got.LtCurr), want)
@@ -87,7 +87,7 @@ func TestEachGroupStartsItsCountAfresh(t *testing.T) {
 		{POCLSB: 200, Used: true, MSBPresent: true, DeltaMSBCycle: 1, FromSPS: true},
 		{POCLSB: 200, Used: true, MSBPresent: true, DeltaMSBCycle: 1},
 	}}
-	got := Derive(refs, 100, sps)
+	got := derive(t, refs, 100, sps)
 	// The second entry is the first the slice states, so it counts one wrap
 	// back rather than two.
 	if want := []int32{-56, -56}; !sameInts(ltPOCs(got.LtCurr), want) {
@@ -115,7 +115,7 @@ func TestFromASliceToThePicturesItNeeds(t *testing.T) {
 		t.Fatalf("order count = %d; want 50", poc.Value)
 	}
 
-	got := Derive(refs, poc.Value, sps)
+	got := derive(t, refs, poc.Value, sps)
 	if want := []int32{49}; !sameInts(got.StCurrBefore, want) {
 		t.Errorf("before = %v; want %v", got.StCurrBefore, want)
 	}
@@ -138,7 +138,7 @@ func TestTheResolutionHoldsForANegativeOrderCount(t *testing.T) {
 		{POCLSB: 3, Used: true, MSBPresent: true, DeltaMSBCycle: 1},
 	}}
 	// -5 has low bits 11 against high bits -16.
-	got := Derive(refs, -5, sps)
+	got := derive(t, refs, -5, sps)
 	if len(got.LtCurr) != 1 {
 		t.Fatal("no entry")
 	}
@@ -150,7 +150,7 @@ func TestTheResolutionHoldsForANegativeOrderCount(t *testing.T) {
 
 // An IDR needs nothing, and that has to survive the derivation too.
 func TestAnIDRDerivesAnEmptySet(t *testing.T) {
-	got := Derive(PictureRefs{}, 0, SPS{Log2MaxPOCLSB: 8})
+	got := derive(t, PictureRefs{}, 0, SPS{Log2MaxPOCLSB: 8})
 	if got.Count() != 0 {
 		t.Errorf("an empty slice derived %d pictures", got.Count())
 	}

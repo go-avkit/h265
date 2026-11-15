@@ -52,11 +52,11 @@ jobs:
       # A run that executed nothing would be green: name the passes.
       - name: the tests ran
         run: |
-          for t in TestEverySPSOfTheConformanceSuiteParses TestSPSAgainstTheTraces TestEveryPPSOfTheConformanceSuiteParses TestPPSAgainstTheTraces; do
+          for t in TestEverySPSOfTheConformanceSuiteParses TestSPSAgainstTheTraces TestEveryPPSOfTheConformanceSuiteParses TestPPSAgainstTheTraces TestEverySliceHeaderOfTheConformanceSuite; do
             grep -q -- "--- PASS: $t" conformance.log || { echo "::error::$t did not pass"; exit 1; }
           done
           # ... and the counts they printed: the streams and sets the suite holds.
-          for c in "sps streams=196" "sps-trace streams=27" "pps-trace streams=27" "pps sets=1310 validated=1276"; do
+          for c in "sps streams=196" "sps-trace streams=27" "pps-trace streams=27" "pps sets=1310 validated=1281" "slices=52215 refused=56 traced=7580"; do
             grep -F -- "conformance-count: $c" conformance.log || { echo "::error::no 'conformance-count: $c' line"; exit 1; }
           done
 

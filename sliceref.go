@@ -63,6 +63,11 @@ type PictureRefs struct {
 	Weights *PredWeights
 	// MaxMergeCand is 5 - five_minus_max_num_merge_cand, in 1..5.
 	MaxMergeCand uint8
+
+	// SAOLuma and SAOChroma are slice_sao_luma_flag and slice_sao_chroma_flag;
+	// MvdL1Zero is mvd_l1_zero_flag and CabacInit is cabac_init_flag.
+	SAOLuma, SAOChroma   bool
+	MvdL1Zero, CabacInit bool
 }
 
 // numPicTotalCurr is 7.4.7.2: how many pictures this slice may predict from,
@@ -113,32 +118,8 @@ func ReferencesOf(u Unit, sps SPS, pps PPS) (PictureRefs, error) {
 		return out, err
 	}
 
-	if r.flag() { // short_term_ref_pic_set_sps_flag
-		if len(sps.ShortTermRefPicSets) == 0 {
-			return out, fmt.Errorf("%w: a slice names a set and the sequence carries none", ErrSliceHeader)
-		}
-		idx := 0
-		// The index is only sent when there is a choice, and it is as wide as
-		// the number of sets needs: one set means no bits at all.
-		if n := ceilLog2(len(sps.ShortTermRefPicSets)); n > 0 {
-			idx = int(r.bits(n))
-		}
-		if r.err != nil {
-			return out, r.err
-		}
-		if idx >= len(sps.ShortTermRefPicSets) {
-			return out, fmt.Errorf("%w: a slice names set %d of %d",
-				ErrSliceHeader, idx, len(sps.ShortTermRefPicSets))
-		}
-		out.ShortTerm, out.NamedSet, out.SetIndex = sps.ShortTermRefPicSets[idx], true, idx
-	} else {
-		// Stated outright, and it may still be a difference from one of the
-		// sequence's sets: a slice's own set sits after all of them.
-		set, err := parseShortTermRPS(r, len(sps.ShortTermRefPicSets), sps.ShortTermRefPicSets, true)
-		if err != nil {
-			return out, err
-		}
-		out.ShortTerm = set
+	if err := readSliceShortTerm(r, sps, &out); err != nil {
+		return out, err
 	}
 
 	// No final error check: every path above either returns r.err itself or
@@ -147,10 +128,43 @@ func ReferencesOf(u Unit, sps SPS, pps PPS) (PictureRefs, error) {
 		return out, err
 	}
 	out.Type = sliceType
-	if err := readSliceLists(r, sps, pps, &out); err != nil {
+	if err := readSliceLists(r, sps, pps, &out, false); err != nil {
 		return out, err
 	}
 	return out, nil
+}
+
+// readSliceShortTerm reads short_term_ref_pic_set_sps_flag and what follows it:
+// the index of one of the sequence's sets, or a set stated outright.
+func readSliceShortTerm(r *sticky, sps SPS, out *PictureRefs) error {
+	if r.flag() { // short_term_ref_pic_set_sps_flag
+		if len(sps.ShortTermRefPicSets) == 0 {
+			return fmt.Errorf("%w: a slice names a set and the sequence carries none", ErrSliceHeader)
+		}
+		idx := 0
+		// The index is only sent when there is a choice, and it is as wide as
+		// the number of sets needs: one set means no bits at all.
+		if n := ceilLog2(len(sps.ShortTermRefPicSets)); n > 0 {
+			idx = int(r.bits(n))
+		}
+		if r.err != nil {
+			return r.err
+		}
+		if idx >= len(sps.ShortTermRefPicSets) {
+			return fmt.Errorf("%w: a slice names set %d of %d",
+				ErrSliceHeader, idx, len(sps.ShortTermRefPicSets))
+		}
+		out.ShortTerm, out.NamedSet, out.SetIndex = sps.ShortTermRefPicSets[idx], true, idx
+		return nil
+	}
+	// Stated outright, and it may still be a difference from one of the
+	// sequence's sets: a slice's own set sits after all of them.
+	set, err := parseShortTermRPS(r, len(sps.ShortTermRefPicSets), sps.ShortTermRefPicSets, true)
+	if err != nil {
+		return err
+	}
+	out.ShortTerm = set
+	return nil
 }
 
 // readSliceLists reads what the slice says about its reference lists: how many
@@ -159,17 +173,21 @@ func ReferencesOf(u Unit, sps SPS, pps PPS) (PictureRefs, error) {
 // The two flags before them state nothing this package keeps, but both are
 // CONDITIONAL on the sequence, and a reader that guessed either is misaligned
 // from that point on.
-func readSliceLists(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
-	if sps.TemporalMVPEnabled {
+//
+// idr says the unit is an IDR picture, which states no order count, no reference
+// set and no slice_temporal_mvp_enabled_flag: all of them sit inside the
+// `nal_unit_type != IDR` block of 7.3.6.1.
+func readSliceLists(r *sticky, sps SPS, pps PPS, out *PictureRefs, idr bool) error {
+	if sps.TemporalMVPEnabled && !idr {
 		out.TemporalMVP = r.flag()
 	}
 	if sps.SAOEnabled {
-		r.bit() // slice_sao_luma_flag
+		out.SAOLuma = r.flag() // slice_sao_luma_flag
 		// ⛔ ChromaArrayType, not chroma_format_idc. They differ by exactly one
 		// case: separate colour planes make the format 4:4:4 and the array type
 		// ZERO, so a reader using the format reads a bit that is not there.
 		if chromaArrayType(sps) != 0 {
-			r.bit() // slice_sao_chroma_flag
+			out.SAOChroma = r.flag() // slice_sao_chroma_flag
 		}
 	}
 	if out.Type != SliceP && out.Type != SliceB {
@@ -232,10 +250,10 @@ func readSliceLists(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
 // the slice type and the other on the picture parameter set.
 func readSlicePrediction(r *sticky, sps SPS, pps PPS, out *PictureRefs) error {
 	if out.Type == SliceB {
-		r.bit() // mvd_l1_zero_flag
+		out.MvdL1Zero = r.flag() // mvd_l1_zero_flag
 	}
 	if pps.CABACInitPresent {
-		r.bit() // cabac_init_flag
+		out.CabacInit = r.flag() // cabac_init_flag
 	}
 	if out.TemporalMVP {
 		// A P slice has only list 0 to take it from, and says nothing.
@@ -362,6 +380,10 @@ func readSliceLongTerm(r *sticky, sps SPS, out *PictureRefs) error {
 		e.MSBPresent = r.flag()
 		if e.MSBPresent {
 			e.DeltaMSBCycle = r.ue()
+			// 7.4.7.1: 0 to 2^(32 - log2_max_pic_order_cnt_lsb), as read.
+			if r.err == nil && uint64(e.DeltaMSBCycle) > uint64(1)<<(32-sps.Log2MaxPOCLSB) {
+				return fmt.Errorf("%w: delta_poc_msb_cycle_lt of %d", ErrSliceHeader, e.DeltaMSBCycle)
+			}
 		}
 		if r.err != nil {
 			return r.err

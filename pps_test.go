@@ -11,7 +11,9 @@ import (
 // pset describes the picture parameter set a test wants written.
 type pset struct {
 	dependentSlices bool
-	refIdxMinus1    uint32
+	// What a slice header reads, off by default.
+	outputFlag, sliceChroma, entropySync, sliceExt bool
+	refIdxMinus1                                   uint32
 	// refIdxWideN writes the num_ref_idx fields as a raw exp-Golomb code with
 	// n leading zeros instead of ue(refIdxMinus1). ⛔ writer.ue cannot emit
 	// 2^32-1 -- it comes back as 1 -- and that is the one value the +1 the
@@ -45,7 +47,7 @@ func (p pset) build() Unit {
 	w.ue(p.ppsID) // pps_pic_parameter_set_id
 	w.ue(p.spsID) // pps_seq_parameter_set_id
 	w.flag(p.dependentSlices)
-	w.bit(0) // output_flag_present_flag
+	w.flag(p.outputFlag) // output_flag_present_flag
 	w.bits(p.extraBits, 3)
 	w.bit(0)                 // sign_data_hiding
 	w.bit(1)                 // cabac_init_present
@@ -77,14 +79,14 @@ func (p pset) build() Unit {
 	if p.chromaOffsets != nil {
 		off = *p.chromaOffsets
 	}
-	w.se(off[0]) // pps_cb_qp_offset
-	w.se(off[1]) // pps_cr_qp_offset
-	w.bit(0)     // slice chroma qp offsets present
-	w.bit(0)     // weighted_pred
-	w.bit(0)     // weighted_bipred
-	w.bit(0)     // transquant_bypass
+	w.se(off[0])          // pps_cb_qp_offset
+	w.se(off[1])          // pps_cr_qp_offset
+	w.flag(p.sliceChroma) // pps_slice_chroma_qp_offsets_present_flag
+	w.bit(0)              // weighted_pred
+	w.bit(0)              // weighted_bipred
+	w.bit(0)              // transquant_bypass
 	w.flag(p.tiles)
-	w.bit(0) // entropy_coding_sync
+	w.flag(p.entropySync) // entropy_coding_sync_enabled_flag
 	if p.tiles {
 		w.ue(p.tileCols - 1)
 		w.ue(p.tileRows - 1)
@@ -148,7 +150,7 @@ func (p pset) build() Unit {
 	}
 	w.bit(1)            // lists_modification_present
 	w.ue(p.mergeMinus2) // log2_parallel_merge_level_minus2
-	w.bit(0)            // slice_segment_header_extension_present
+	w.flag(p.sliceExt)  // slice_segment_header_extension_present_flag
 	w.flag(p.extension || p.ext != nil)
 	if p.ext != nil {
 		p.ext(w)
