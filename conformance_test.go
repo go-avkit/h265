@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,17 +33,27 @@ func conformance(t *testing.T) *pinned {
 	t.Helper()
 	dir := os.Getenv("H265_CONFORMANCE_DIR")
 	if dir == "" {
+		// ⛔ In CI an oracle that is not there is a failure, never a skip: a
+		// green run must mean the streams were read.
+		if os.Getenv("CI") == "true" && os.Getenv("H265_CONFORMANCE_SKIP_OK") != "1" {
+			t.Fatal("H265_CONFORMANCE_DIR is not set in CI")
+		}
 		t.Skip("H265_CONFORMANCE_DIR is not set")
 	}
-	manifest, err := os.ReadFile(filepath.Join("testdata", "conformance.sha256"))
-	if err != nil {
-		t.Fatal(err)
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		t.Fatalf("H265_CONFORMANCE_DIR %q is not a directory: %v", dir, err)
 	}
 	p := &pinned{dir: dir, hash: map[string]string{}}
-	sc := bufio.NewScanner(bytes.NewReader(manifest))
-	for sc.Scan() {
-		if f := strings.Fields(sc.Text()); len(f) == 2 {
-			p.hash[f[1]] = f[0]
+	for _, name := range []string{"conformance.sha256", "conformance-rext.sha256"} {
+		manifest, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sc := bufio.NewScanner(bytes.NewReader(manifest))
+		for sc.Scan() {
+			if f := strings.Fields(sc.Text()); len(f) == 2 {
+				p.hash[f[1]] = f[0]
+			}
 		}
 	}
 	return p
@@ -112,22 +123,45 @@ func TestEverySPSOfTheConformanceSuiteParses(t *testing.T) {
 			t.Errorf("%s: %v", rel, err)
 			continue
 		}
-		found := 0
+		found, refused := 0, 0
 		for _, u := range units {
 			if u.Type != UnitSPS {
 				continue
 			}
 			found++
-			if _, err := ParseSPS(u); err != nil {
+			_, err := ParseSPS(u)
+			switch {
+			case errors.Is(err, ErrBypassAlignment):
+				refused++
+			case err != nil:
 				t.Errorf("%s: %v", rel, err)
 			}
 		}
 		if found == 0 {
 			t.Errorf("%s: no sequence parameter set", rel)
 		}
+		// Exactly the streams that enable cabac_bypass_alignment are refused,
+		// and for that reason alone.
+		if want := alignedStreams[filepath.Dir(rel)]; want != (refused > 0) {
+			t.Errorf("%s: refused for bypass alignment = %v, want %v", rel, refused > 0, want)
+		}
 		n++
 	}
 	t.Logf("%d streams", n)
+}
+
+// alignedStreams are the conformance streams whose SPS enables
+// cabac_bypass_alignment_enabled_flag (the High Throughput 4:4:4 16 Intra
+// streams, and others that turn it on), found by reading their SPS and pinned
+// here so that a change in what is refused is noticed.
+var alignedStreams = map[string]bool{
+	"EXTPREC_HIGHTHROUGHPUT_444_16_INTRA_8BIT_RExt_Sony_1":                 true,
+	"EXTPREC_HIGHTHROUGHPUT_444_16_INTRA_10BIT_RExt_Sony_1":                true,
+	"EXTPREC_HIGHTHROUGHPUT_444_16_INTRA_12BIT_RExt_Sony_1":                true,
+	"EXTPREC_HIGHTHROUGHPUT_444_16_INTRA_16BIT_RExt_Sony_1":                true,
+	"GENERAL_16b_444_highThroughput_RExt_Sony_2":                           true,
+	"WAVETILES_RExt_Sony_2":                                                true,
+	"WPP_AND_TILE_AND_CABAC_BYPASS_ALIGN_1_HIGH_TP_444_14BIT_RExt_Apple_2": true,
 }
 
 // spsAliases name each SPS field as the traces do. HM changed its names over

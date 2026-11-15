@@ -17,6 +17,11 @@ var (
 	// ErrUnsupportedSPS means the set states something this reader does not
 	// follow.
 	ErrUnsupportedSPS = errors.New("h265: unsupported sequence parameter set")
+	// ErrBypassAlignment means the set enables cabac_bypass_alignment_enabled_flag
+	// (9.3.4.3.6), which Annex A requires in High Throughput 4:4:4 16 Intra and
+	// which this decoder does not implement. It is returned together with
+	// ErrUnsupportedSPS.
+	ErrBypassAlignment = errors.New("h265: cabac_bypass_alignment_enabled_flag is not supported")
 )
 
 // SPS is what a sequence parameter set says about the pictures that follow.
@@ -113,8 +118,18 @@ func ParseSPS(u Unit) (SPS, error) {
 	r := newSticky(u.Unescape())
 	var s SPS
 
+	// Annex F sets (nuh_layer_id above 0) have another syntax for the same NAL
+	// unit type; this reader is the base layer's.
+	if u.LayerID != 0 {
+		return s, fmt.Errorf("%w: nuh_layer_id %d", ErrUnsupportedSPS, u.LayerID)
+	}
+
 	s.VPSID = uint8(r.bits(4))
-	s.MaxSubLayers = uint8(r.bits(3)) + 1
+	subLayersMinus1 := r.bits(3)
+	if subLayersMinus1 > 6 { // sps_max_sub_layers_minus1 is 0 to 6; 7 is reserved
+		return s, fmt.Errorf("%w: sps_max_sub_layers_minus1 of %d", ErrUnsupportedSPS, subLayersMinus1)
+	}
+	s.MaxSubLayers = uint8(subLayersMinus1) + 1
 	r.bit() // sps_temporal_id_nesting_flag
 
 	// The general profile, tier and level, then whatever the sub-layers state.
@@ -126,10 +141,14 @@ func ParseSPS(u Unit) (SPS, error) {
 	s.skipSubLayerPTL(r)
 
 	s.ID = r.ue()
-	s.ChromaFormat = uint8(r.ue())
-	if s.ChromaFormat > 3 {
-		return s, fmt.Errorf("%w: chroma format %d is not 0 to 3", ErrUnsupportedSPS, s.ChromaFormat)
+	if r.err == nil && s.ID > 15 { // sps_seq_parameter_set_id is 0 to 15
+		return s, fmt.Errorf("%w: sps_seq_parameter_set_id of %d", ErrUnsupportedSPS, s.ID)
 	}
+	chroma := r.ue() // bounded before it is narrowed
+	if r.err == nil && chroma > 3 {
+		return s, fmt.Errorf("%w: chroma format %d is not 0 to 3", ErrUnsupportedSPS, chroma)
+	}
+	s.ChromaFormat = uint8(chroma)
 	if s.ChromaFormat == 3 {
 		s.SeparatePlanes = r.flag()
 	}
@@ -139,12 +158,23 @@ func ParseSPS(u Unit) (SPS, error) {
 		s.WinLeft, s.WinRight = r.ue(), r.ue()
 		s.WinTop, s.WinBottom = r.ue(), r.ue()
 	}
+	if r.err == nil {
+		// 7.4.3.2.1: SubWidthC * ( left + right ) is less than the width, and the
+		// same for the height. Summed in 64 bits: four 32-bit offsets wrap in 32.
+		subW, subH := s.chromaUnits()
+		if subW*(uint64(s.WinLeft)+uint64(s.WinRight)) >= uint64(s.CodedWidth) ||
+			subH*(uint64(s.WinTop)+uint64(s.WinBottom)) >= uint64(s.CodedHeight) {
+			return s, fmt.Errorf("%w: a conformance window of %d+%d by %d+%d in a %dx%d picture",
+				ErrUnsupportedSPS, s.WinLeft, s.WinRight, s.WinTop, s.WinBottom, s.CodedWidth, s.CodedHeight)
+		}
+	}
 	// ⛔ Each of these is read and bounded BEFORE the conversion that narrows
 	// it. uint8(1048576) is 0, so a value a million past the range comes out
 	// looking like the smallest legal one -- and a bound applied afterwards
 	// passes it. That is how the check below used to be written.
 	//
-	// The two bit depths are 7.4.3.2.1's 0..6, and the order count width its
+	// The two bit depths are 7.4.3.2.1's 0..8 (16 bits, with the range
+	// extensions), and the order count width its
 	// 0..12. The last is a BIT COUNT that a slice header reads a field with:
 	// a reader given a wrong one is misaligned from that field on.
 	bdY, bdC, pocW := r.ue(), r.ue(), r.ue()
@@ -155,8 +185,8 @@ func ParseSPS(u Unit) (SPS, error) {
 		name  string
 		v, hi uint32
 	}{
-		{"bit_depth_luma_minus8", bdY, 6},
-		{"bit_depth_chroma_minus8", bdC, 6},
+		{"bit_depth_luma_minus8", bdY, 8},
+		{"bit_depth_chroma_minus8", bdC, 8},
 		{"log2_max_pic_order_cnt_lsb_minus4", pocW, 12},
 	} {
 		if f.v > f.hi {
@@ -205,7 +235,9 @@ func ParseSPS(u Unit) (SPS, error) {
 	if err := s.readShortTermRefPicSets(r); err != nil {
 		return s, err
 	}
-	s.readLongTermRefPics(r)
+	if err := s.readLongTermRefPics(r); err != nil {
+		return s, err
+	}
 	s.TemporalMVPEnabled = r.flag()
 	s.StrongIntraSmoothing = r.flag()
 	if r.flag() { // vui_parameters_present_flag
@@ -229,9 +261,8 @@ func ParseSPS(u Unit) (SPS, error) {
 			return s, fmt.Errorf("%w: no stop bit at the end", ErrUnsupportedSPS)
 		}
 	}
-	if s.CodedWidth == 0 || s.CodedHeight == 0 {
-		return s, fmt.Errorf("%w: a coded size of %dx%d", ErrUnsupportedSPS, s.CodedWidth, s.CodedHeight)
-	}
+	// A coded size of nothing was refused above: the window, even empty, is
+	// not less than a width or height of zero.
 	s.size()
 	return s, nil
 }
@@ -330,6 +361,12 @@ func (s *SPS) readExtensions(r *sticky) (extData bool, err error) {
 			HighPrecisionOffsets:        r.flag(),
 			PersistentRiceAdaptation:    r.flag(),
 			CabacBypassAlignment:        r.flag(),
+		}
+		// The CABAC engine cannot decode aligned bypass bins exactly
+		// (internal/cabac.ErrBypassAlignment): refused here, where the flag is
+		// read, until slice data is wired to cabac.Config.
+		if s.Range.CabacBypassAlignment {
+			return false, fmt.Errorf("%w: %w", ErrUnsupportedSPS, ErrBypassAlignment)
 		}
 	}
 	if multilayer {
@@ -463,19 +500,20 @@ func (s *SPS) readShortTermRefPicSets(r *sticky) error {
 // readLongTermRefPics reads the long-term pictures a sequence offers. They are
 // named by the low bits of their order count, which is all a slice header needs
 // to pick one.
-func (s *SPS) readLongTermRefPics(r *sticky) {
+func (s *SPS) readLongTermRefPics(r *sticky) error {
 	if !r.flag() { // long_term_ref_pics_present_flag
-		return
+		return nil
 	}
 	s.LongTermRefPicsPresent = true
 	n := r.ue()
-	if r.err != nil || n > maxLongTermPics {
-		return
+	if r.err == nil && n > maxLongTermPics { // num_long_term_ref_pics_sps is 0 to 32
+		return fmt.Errorf("%w: %d long-term reference pictures in the set", ErrUnsupportedSPS, n)
 	}
 	for i := uint32(0); i < n; i++ {
 		lsb := r.bits(int(s.Log2MaxPOCLSB))
 		s.LongTermRefPics = append(s.LongTermRefPics, LongTermRefPic{POCLSB: lsb, Used: r.flag()})
 	}
+	return nil
 }
 
 // skipSubLayerPTL consumes what the sub-layers state about profile and level.
@@ -525,19 +563,26 @@ func (s *SPS) size() {
 	// plausible size. The same condition was already merged in go-avkit/h264, and
 	// its own 4:4:4 test used separate colour planes, which takes the other
 	// branch: the case was never exercised there.
-	var subW, subH uint32
+	subW, subH := s.chromaUnits()
+	// ParseSPS has checked that the window is smaller than the picture, in 64
+	// bits, so neither subtraction wraps.
+	s.Width = uint32(uint64(s.CodedWidth) - subW*(uint64(s.WinLeft)+uint64(s.WinRight)))
+	s.Height = uint32(uint64(s.CodedHeight) - subH*(uint64(s.WinTop)+uint64(s.WinBottom)))
+}
+
+// chromaUnits is SubWidthC and SubHeightC (Table 6-1): the unit, in luma
+// samples, of the conformance window's offsets.
+func (s *SPS) chromaUnits() (subW, subH uint64) {
 	switch {
 	case s.ChromaFormat == 1: // 4:2:0, half in both directions
-		subW, subH = 2, 2
+		return 2, 2
 	case s.ChromaFormat == 2: // 4:2:2, half width only
-		subW, subH = 2, 1
+		return 2, 1
 	default: // monochrome and 4:4:4: one sample each way
 		// Separate colour planes need no case of their own: the flag only exists
 		// when the format is 4:4:4, which lands here already.
-		subW, subH = 1, 1
+		return 1, 1
 	}
-	s.Width = s.CodedWidth - subW*(s.WinLeft+s.WinRight)
-	s.Height = s.CodedHeight - subH*(s.WinTop+s.WinBottom)
 }
 
 // sticky reads fields in a straight line, keeping the first error.

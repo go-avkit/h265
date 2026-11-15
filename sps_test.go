@@ -94,6 +94,8 @@ type set struct {
 	// difference it can state is +1, which shifts every entry by one and moves
 	// across zero any entry that crosses it.
 	predictLast bool
+	// spsID is sps_seq_parameter_set_id.
+	spsID uint32
 	// longTerm writes that many long-term pictures.
 	longTerm int
 	// pocLSBMinus4 overrides log2_max_pic_order_cnt_lsb_minus4, so a test can
@@ -159,7 +161,7 @@ func (s set) build() Unit {
 			w.bits(90, 8) // sub_layer_level_idc
 		}
 	}
-	w.ue(0) // sps_seq_parameter_set_id
+	w.ue(s.spsID) // sps_seq_parameter_set_id
 	w.ue(s.chroma)
 	if s.chroma == 3 {
 		if s.separatePlanes {
@@ -578,9 +580,9 @@ func TestAWidthCheckedAfterTheCastThatWraps(t *testing.T) {
 		name         string
 		luma, chroma uint32
 	}{
-		{"a luma depth one past the range", 7, 0},
+		{"a luma depth one past the range", 9, 0},
 		{"a luma depth wrapping to zero", 256, 0},
-		{"a chroma depth one past the range", 0, 7},
+		{"a chroma depth one past the range", 0, 9},
 		{"a chroma depth wrapping to zero", 0, 1 << 20},
 	} {
 		s := base()
@@ -589,10 +591,11 @@ func TestAWidthCheckedAfterTheCastThatWraps(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrUnsupportedSPS", c.name, err)
 		}
 	}
-	// Six is the largest depth the format allows -- 14 bits -- and must be read.
+	// Eight is the largest depth the format allows -- 16 bits, with the range
+	// extensions -- and must be read.
 	deep := base()
-	deep.bdLuma, deep.bdChroma = 6, 6
-	if sps, err := ParseSPS(deep.build()); err != nil || sps.BitDepthLuma != 14 {
+	deep.bdLuma, deep.bdChroma = 8, 8
+	if sps, err := ParseSPS(deep.build()); err != nil || sps.BitDepthLuma != 16 {
 		t.Errorf("a depth of 6 gave %d, %v", sps.BitDepthLuma, err)
 	}
 

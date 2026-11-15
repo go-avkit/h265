@@ -28,6 +28,58 @@ func TestSPSBlockGeometry(t *testing.T) {
 	}
 }
 
+// TestSPSRefusalsOfTheReview: each of these was accepted before, and each must
+// now fail by assertion with ErrUnsupportedSPS.
+func TestSPSRefusalsOfTheReview(t *testing.T) {
+	for name, s := range map[string]set{
+		// 7.4.3.2.1: SubWidthC * ( left + right ) < width. Width 64 with a window
+		// of 40+40 used to give a width of 4294967200.
+		"window wider than the picture":        {chroma: 1, width: 64, height: 64, window: [4]uint32{40, 40, 0, 0}},
+		"window taller than the picture":       {chroma: 1, width: 64, height: 64, window: [4]uint32{0, 0, 17, 16}},
+		"window exactly the picture, 4:2:0":    {chroma: 1, width: 64, height: 64, window: [4]uint32{16, 16, 0, 0}},
+		"window exactly the picture, 4:4:4":    {chroma: 3, width: 64, height: 64, window: [4]uint32{32, 32, 0, 0}},
+		"window exactly the picture, 4:2:2 h":  {chroma: 2, width: 64, height: 64, window: [4]uint32{0, 0, 32, 32}},
+		"window offsets that wrap in 32 bits":  {chroma: 1, width: 64, height: 64, window: [4]uint32{1 << 31, 1 << 31, 0, 0}},
+		"window offsets that wrap, the height": {chroma: 1, width: 64, height: 64, window: [4]uint32{0, 0, 1 << 31, 1 << 31}},
+		"sps id 16":                            {chroma: 1, width: 64, height: 64, spsID: 16},
+		"chroma format wrapping to 1":          {chroma: 257, width: 64, height: 64},
+		"33 long-term pictures in the set":     {chroma: 1, width: 64, height: 64, longTerm: 33},
+	} {
+		s.subLayers = 1
+		if _, err := ParseSPS(s.build()); !errors.Is(err, ErrUnsupportedSPS) {
+			t.Errorf("%s: err = %v, want ErrUnsupportedSPS", name, err)
+		}
+	}
+	// One short of each boundary parses, and the size is right.
+	for name, s := range map[string]set{
+		"4:2:0 window":  {chroma: 1, width: 64, height: 64, window: [4]uint32{15, 16, 0, 0}},
+		"4:4:4 window":  {chroma: 3, width: 64, height: 64, window: [4]uint32{31, 32, 0, 0}},
+		"sps id 15":     {chroma: 1, width: 64, height: 64, spsID: 15},
+		"32 long terms": {chroma: 1, width: 64, height: 64, longTerm: 32},
+	} {
+		s.subLayers = 1
+		if _, err := ParseSPS(s.build()); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if sps, _ := ParseSPS(set{subLayers: 1, chroma: 1, width: 64, height: 64, window: [4]uint32{15, 16, 0, 0}}.build()); sps.Width != 2 {
+		t.Errorf("Width = %d, want 2", sps.Width)
+	}
+	// sps_max_sub_layers_minus1 is 0 to 6.
+	if _, err := ParseSPS(set{subLayers: 8, chroma: 1, width: 64, height: 64}.build()); !errors.Is(err, ErrUnsupportedSPS) {
+		t.Errorf("sps_max_sub_layers_minus1 of 7: %v", err)
+	}
+	if _, err := ParseSPS(set{subLayers: 7, chroma: 1, width: 64, height: 64}.build()); err != nil {
+		t.Errorf("sps_max_sub_layers_minus1 of 6: %v", err)
+	}
+	// An Annex F set (nuh_layer_id above 0).
+	u := base().build()
+	u.LayerID = 1
+	if _, err := ParseSPS(u); !errors.Is(err, ErrUnsupportedSPS) {
+		t.Errorf("nuh_layer_id 1: %v", err)
+	}
+}
+
 func TestSPSGeometryRefusals(t *testing.T) {
 	for name, s := range map[string]set{
 		"min coding block of 128":         {sizes: []uint32{4, 0, 0, 1, 0, 0}},
@@ -63,20 +115,26 @@ func rangeExt(flags ...bool) func(*writer) {
 
 func TestSPSRangeExtension(t *testing.T) {
 	s := base()
-	s.ext = rangeExt(true, false, true, false, true, false, true, false, true)
+	s.ext = rangeExt(true, false, true, false, true, false, true, false, false)
 	got, err := ParseSPS(s.build())
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := RangeExtension{
 		TransformSkipRotation: true, ImplicitRDPCM: true, ExtendedPrecisionProcessing: true,
-		HighPrecisionOffsets: true, CabacBypassAlignment: true,
+		HighPrecisionOffsets: true,
 	}
 	if got.Range != want {
 		t.Errorf("Range = %+v, want %+v", got.Range, want)
 	}
-	// Every flag in its own position.
-	for i := 0; i < 9; i++ {
+	// cabac_bypass_alignment_enabled_flag is refused at parse time, with a typed
+	// error that is also an ErrUnsupportedSPS.
+	s.ext = rangeExt(false, false, false, false, false, false, false, false, true)
+	if _, err := ParseSPS(s.build()); !errors.Is(err, ErrBypassAlignment) || !errors.Is(err, ErrUnsupportedSPS) {
+		t.Errorf("bypass alignment: err = %v, want ErrBypassAlignment and ErrUnsupportedSPS", err)
+	}
+	// Every other flag in its own position.
+	for i := 0; i < 8; i++ {
 		flags := make([]bool, 9)
 		flags[i] = true
 		s.ext = rangeExt(flags...)
@@ -87,7 +145,7 @@ func TestSPSRangeExtension(t *testing.T) {
 		r := got.Range
 		set := []bool{r.TransformSkipRotation, r.TransformSkipContext, r.ImplicitRDPCM, r.ExplicitRDPCM,
 			r.ExtendedPrecisionProcessing, r.IntraSmoothingDisabled, r.HighPrecisionOffsets,
-			r.PersistentRiceAdaptation, r.CabacBypassAlignment}
+			r.PersistentRiceAdaptation}
 		for j, v := range set {
 			if v != (j == i) {
 				t.Errorf("flag %d set: field %d is %v", i, j, v)
@@ -253,12 +311,12 @@ func TestSPSVUIIsConsumedExactly(t *testing.T) {
 				s.subLayers = 3
 			}
 			s.vui = fullVUI(sar, hrd)
-			s.ext = rangeExt(false, false, false, false, false, false, false, false, true)
+			s.ext = rangeExt(false, false, false, false, false, false, false, true, false)
 			got, err := ParseSPS(s.build())
 			if err != nil {
 				t.Fatalf("%s, sar %v: %v", name, sar, err)
 			}
-			if !got.Range.CabacBypassAlignment {
+			if !got.Range.PersistentRiceAdaptation {
 				t.Errorf("%s, sar %v: the extension after the VUI was misread: %+v", name, sar, got.Range)
 			}
 		}

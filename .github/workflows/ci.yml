@@ -11,7 +11,51 @@ permissions:
 
 # Every job installs the Go release that go.mod names (go-version-file), so the
 # floor and the CI toolchain cannot drift apart: no second pin to move.
+# The H.265.1 conformance streams are not committed. Under CI=true the tests that
+# read them FAIL when H265_CONFORMANCE_DIR is unset, unless a lane says it does
+# not carry the corpus with H265_CONFORMANCE_SKIP_OK=1 (every lane but the
+# conformance job below, which is where the oracle is read).
+env:
+  H265_CONFORMANCE_SKIP_OK: '1'
+
 jobs:
+  # Fetch the H.265.1 (HEVC_v1) and RExt conformance zips named by the pin
+  # manifests, verify every bitstream and trace by SHA-256, and run the tests that
+  # compare against them: every SPS and PPS of the suite, and the HM traces. A
+  # missing directory or a hash that differs fails the job; the tests do not skip.
+  conformance:
+    runs-on: ubuntu-latest
+    env:
+      H265_CONFORMANCE_SKIP_OK: '0'
+      H265_CONFORMANCE_DIR: ${{ github.workspace }}/.conformance
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@v4
+        with:
+          path: .conformance
+          key: h265-conformance-${{ hashFiles('testdata/conformance.sha256', 'testdata/conformance-rext.sha256') }}
+      - name: fetch and verify HEVC_v1
+        run: >
+          go run ./testdata/fetchconformance -dir .conformance
+          -base https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1
+          -manifest testdata/conformance.sha256
+      - name: fetch and verify RExt
+        run: >
+          go run ./testdata/fetchconformance -dir .conformance
+          -base https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/RExt
+          -manifest testdata/conformance-rext.sha256
+      - name: conformance tests
+        run: go test -count=1 -v -run 'Conformance|Traces' . > conformance.log 2>&1 || { cat conformance.log; exit 1; }
+      # A run that executed nothing would be green: name the passes.
+      - name: the tests ran
+        run: |
+          for t in TestEverySPSOfTheConformanceSuiteParses TestSPSAgainstTheTraces; do
+            grep -q -- "--- PASS: $t" conformance.log || { echo "::error::$t did not pass"; exit 1; }
+          done
+
   # Every file must be gofmt-clean.
   gofmt:
     runs-on: ubuntu-latest
