@@ -80,6 +80,8 @@ type set struct {
 	// scalingList writes a scaling list, whose length depends on itself: the
 	// reference picture sets come after it, so getting it wrong misaligns them.
 	scalingList bool
+	// badScalingList states a list that copies a matrix before the first.
+	badScalingList bool
 	// pcm writes the PCM fields, which are also conditional.
 	pcm bool
 	// stRPS are short-term reference picture sets, each stated outright as
@@ -205,10 +207,16 @@ func (s set) buildTail(w *writer) {
 	for _, v := range sizes { // log2_min_luma_coding_block_size_minus3, log2_diff_max_min_luma_coding_block_size,
 		w.ue(v) // log2_min_luma_transform_block_size_minus2, log2_diff_max_min_luma_transform_block_size,
 	} // max_transform_hierarchy_depth_inter, max_transform_hierarchy_depth_intra
-	if s.scalingList {
+	if s.scalingList || s.badScalingList {
 		w.bit(1) // scaling_list_enabled_flag
 		w.bit(1) // sps_scaling_list_data_present_flag
-		writeScalingList(w)
+		if s.badScalingList {
+			w.bit(0) // a copy of a matrix before the first one
+			w.ue(1)
+			w.zeros(64)
+		} else {
+			writeScalingList(w)
+		}
 	} else {
 		w.bit(0)
 	}

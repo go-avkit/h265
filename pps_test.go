@@ -28,6 +28,7 @@ type pset struct {
 	deblockControl  bool
 	deblockDisabled bool
 	scalingLists    bool
+	badScalingList  bool
 	extension       bool
 
 	// Overrides, zero meaning what the builder always wrote.
@@ -117,8 +118,12 @@ func (p pset) build() Unit {
 			w.se(bt[1]) // tc offset
 		}
 	}
-	w.flag(p.scalingLists)
-	if p.scalingLists {
+	w.flag(p.scalingLists || p.badScalingList)
+	if p.badScalingList {
+		w.bit(0) // a copy of a matrix before the first one
+		w.ue(1)
+		w.zeros(64)
+	} else if p.scalingLists {
 		// The first list of each size class is given outright and the rest are
 		// predicted, which exercises both arms without writing thousands of bits.
 		for sizeID := 0; sizeID < 4; sizeID++ {
