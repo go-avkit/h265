@@ -380,6 +380,10 @@ func readSliceLongTerm(r *sticky, sps SPS, out *PictureRefs) error {
 		e.MSBPresent = r.flag()
 		if e.MSBPresent {
 			e.DeltaMSBCycle = r.ue()
+			// 7.4.7.1: 0 to 2^(32 - log2_max_pic_order_cnt_lsb), as read.
+			if r.err == nil && uint64(e.DeltaMSBCycle) > uint64(1)<<(32-sps.Log2MaxPOCLSB) {
+				return fmt.Errorf("%w: delta_poc_msb_cycle_lt of %d", ErrSliceHeader, e.DeltaMSBCycle)
+			}
 		}
 		if r.err != nil {
 			return r.err

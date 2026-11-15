@@ -53,6 +53,9 @@ type SliceHeader struct {
 	// take, before byte_alignment( ) (the unit's two header bytes are not part
 	// of the payload).
 	HeaderBits int
+	// HeaderElements is how many syntax elements the header holds before
+	// byte_alignment( ), as HM's trace counts them.
+	HeaderElements int
 	// DataOffset is the offset of the slice segment data in Unit.Unescape()'s
 	// output: the first byte after byte_alignment( ).
 	DataOffset int
@@ -128,9 +131,12 @@ func ParseSliceSegmentHeaderFull(u Unit, sps SPS, pps PPS, prev *SliceHeader) (S
 		if r.err == nil && n > 256 {
 			return h, fmt.Errorf("%w: slice_segment_header_extension_length of %d", ErrSliceHeader, n)
 		}
-		r.skip(int(n) * 8)
+		for i := uint32(0); i < n && r.err == nil; i++ {
+			r.bits(8) // slice_segment_header_extension_data_byte
+		}
 	}
 	h.HeaderBits = len(u.Unescape())*8 - r.r.Left()
+	h.HeaderElements = r.elements
 	// byte_alignment( ): a one, then zeros to the byte boundary.
 	if r.bit() != 1 {
 		r.err = fmt.Errorf("%w: byte_alignment does not start with a one", ErrSliceHeader)
@@ -144,6 +150,17 @@ func ParseSliceSegmentHeaderFull(u Unit, sps SPS, pps PPS, prev *SliceHeader) (S
 		return h, r.err
 	}
 	h.DataOffset = len(u.Unescape()) - r.r.Left()/8
+	// The subsets together cannot be longer than the data that follows. The NAL
+	// payload still has its emulation prevention bytes (which the offsets count),
+	// so it is at least as long as the unescaped data; a stream within that bound
+	// is never refused, and one past it is. Summed in 64 bits.
+	var sum uint64
+	for _, v := range h.EntryPoints {
+		sum += uint64(v)
+	}
+	if remaining := uint64(len(u.Payload) - h.DataOffset); sum > remaining {
+		return h, fmt.Errorf("%w: entry points total %d bytes, %d follow the header", ErrSliceHeader, sum, remaining)
+	}
 	return h, nil
 }
 
@@ -264,6 +281,12 @@ func readEntryPoints(r *sticky, sps SPS, pps PPS, h *SliceHeader) error {
 		return fmt.Errorf("%w: offset_len_minus1 of %d", ErrSliceHeader, lenMinus1)
 	}
 	width := int(lenMinus1) + 1
+	// ⛔ Each offset takes `width` bits, so n of them cannot be more than the bits
+	// that are left: checked before the allocation, not after it has been made
+	// (2^24-1 offsets claimed in a ten-byte header would be 64 MiB).
+	if r.err == nil && uint64(n)*uint64(width) > uint64(r.r.Left()) {
+		return fmt.Errorf("%w: %d entry points of %d bits in %d bits", ErrSliceHeader, n, width, r.r.Left())
+	}
 	h.EntryPoints = make([]uint32, 0, n)
 	for i := uint32(0); i < n && r.err == nil; i++ {
 		// u(v) of up to 32 bits, read in two parts: sticky.bits takes at most 24 at
@@ -272,6 +295,7 @@ func readEntryPoints(r *sticky, sps SPS, pps PPS, h *SliceHeader) error {
 		if width > 16 {
 			v = uint64(r.bits(width-16)) << 16
 			v |= uint64(r.bits(16))
+			r.elements-- // one element, read in two parts
 		} else {
 			v = uint64(r.bits(width))
 		}

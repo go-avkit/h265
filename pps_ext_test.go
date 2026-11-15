@@ -356,13 +356,19 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// A PPS may precede the SPS it names (RPS_C and VPSSPSPPS_A send them in
+		// other orders), so the sequence sets of the whole stream are gathered
+		// first; an SPS refused for bypass alignment is not among them.
 		spsByID := map[uint32]SPS{}
 		for _, u := range units {
-			switch u.Type {
-			case UnitSPS:
-				if s, err := ParseSPS(u); err == nil { // an SPS refused for bypass alignment is skipped
+			if u.Type == UnitSPS {
+				if s, err := ParseSPS(u); err == nil {
 					spsByID[s.ID] = s
 				}
+			}
+		}
+		for _, u := range units {
+			switch u.Type {
 			case UnitPPS:
 				n++
 				pps, err := ParsePPS(u)
@@ -376,6 +382,10 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 					if err := pps.Validate(s); err != nil {
 						t.Errorf("%s: %v", rel, err)
 					}
+				} else if !alignedStreams[filepath.Dir(rel)] {
+					// Only a stream whose SPS is refused for bypass alignment may
+					// have a PPS that cannot be validated.
+					t.Errorf("%s: a PPS names SPS %d, which is not there, in a stream that does not enable bypass alignment", rel, pps.SPSID)
 				}
 			}
 		}
@@ -396,8 +406,9 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 const wantPPSSets = 1310
 
 // wantPPSValidated is how many of them name an SPS that parsed (the streams that
-// enable cabac_bypass_alignment have a refused SPS, 34 sets in all).
-const wantPPSValidated = 1276
+// enable cabac_bypass_alignment have a refused SPS: 29 sets, each in a stream of
+// alignedStreams, which the test checks).
+const wantPPSValidated = 1281
 
 // wideUE writes an Exp-Golomb code of n leading zeros by hand: writer.ue cannot
 // reach 2^32-1, which is the value a +1 wraps on.

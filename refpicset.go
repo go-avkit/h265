@@ -3,6 +3,8 @@
 
 package h265
 
+import "math"
+
 // LtPicture is one long-term picture a set names.
 //
 // ⛔ POC is a full order count only when Exact is set. Otherwise it is the LOW
@@ -75,18 +77,24 @@ func Derive(refs PictureRefs, poc int32, sps SPS) RefPicSet {
 	if lsb < 0 {
 		lsb += maxLSB
 	}
-	cycle := int32(0)
+	// ⛔ In 64 bits: DeltaPocMsbCycleLt accumulates (7-52) and is multiplied by
+	// MaxPicOrderCntLsb, which overflows 32 bits long before the entries do.
+	// Each cycle is bounded as read (7.4.7.1); a picture whose order count falls
+	// outside the 32-bit range cannot exist, and is clamped to the end of the
+	// range, where nothing in the decoded picture buffer will match it.
+	cycle := int64(0)
 	firstStated := true
 	for i, e := range refs.LongTerm {
 		p := LtPicture{POC: int32(e.POCLSB)}
 		if e.MSBPresent {
-			delta := int32(e.DeltaMSBCycle)
+			delta := int64(e.DeltaMSBCycle)
 			starts := i == 0 || (!e.FromSPS && firstStated)
 			if !starts {
 				delta += cycle
 			}
 			cycle = delta
-			p.POC = int32(e.POCLSB) + poc - delta*maxLSB - lsb
+			full := int64(e.POCLSB) + int64(poc) - delta*int64(maxLSB) - int64(lsb)
+			p.POC = int32(min(max(full, math.MinInt32), math.MaxInt32))
 			p.Exact = true
 		}
 		if !e.FromSPS {

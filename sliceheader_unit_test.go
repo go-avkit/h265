@@ -29,15 +29,41 @@ func mustPPS(t testing.TB, p pset) PPS {
 
 // sliceUnit finishes a header with byte_alignment( ) and one byte of slice data
 // (0xAB), so that DataOffset can be checked against it.
-func hdrUnit(typ UnitType, fn func(w *writer)) Unit {
+func hdrUnit(typ UnitType, fn func(w *writer)) Unit { return hdrUnitN(typ, fn, 1) }
+
+// hdrUnitN is hdrUnit with n bytes of slice data (0xAB, then zeros). The payload
+// is escaped as a NAL unit's is: a header with a long run of zero bits would
+// otherwise contain 00 00 03, which Unescape would take for an escape.
+func hdrUnitN(typ UnitType, fn func(w *writer), n int) Unit {
 	w := &writer{}
 	fn(w)
 	w.bit(1)
 	for w.pos%8 != 0 {
 		w.bit(0)
 	}
-	w.data = append(w.data, 0xAB)
-	return Unit{Type: typ, Payload: w.data}
+	raw := append(w.data, 0xAB)
+	raw = append(raw, make([]byte, n-1)...)
+	return Unit{Type: typ, Payload: escapeRBSP(raw)}
+}
+
+// escapeRBSP inserts an emulation prevention byte after every two zeros that
+// are followed by a byte of 3 or less (7.4.2).
+func escapeRBSP(raw []byte) []byte {
+	var out []byte
+	zeros := 0
+	for _, b := range raw {
+		if zeros >= 2 && b <= 3 {
+			out = append(out, 3)
+			zeros = 0
+		}
+		out = append(out, b)
+		if b == 0 {
+			zeros++
+		} else {
+			zeros = 0
+		}
+	}
+	return out
 }
 
 // 64x64 in coding tree blocks of 16: 16 blocks, 4 rows.
@@ -61,7 +87,7 @@ func TestSliceHeaderEverythingOn(t *testing.T) {
 			w.ue(0)
 		}),
 	})
-	u := hdrUnit(UnitCRA, func(w *writer) {
+	u := hdrUnitN(UnitCRA, func(w *writer) {
 		w.bit(1)      // first_slice_segment_in_pic_flag
 		w.bit(0)      // no_output_of_prior_pics_flag
 		w.ue(0)       // slice_pic_parameter_set_id
@@ -90,7 +116,7 @@ func TestSliceHeaderEverythingOn(t *testing.T) {
 		w.ue(2) // slice_segment_header_extension_length
 		w.bits(0x12, 8)
 		w.bits(0x34, 8)
-	})
+	}, 16) // 16 bytes of slice data: the two offsets are 5 and 10
 	h, err := ParseSliceSegmentHeaderFull(u, sps, pps, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +128,7 @@ func TestSliceHeaderEverythingOn(t *testing.T) {
 		len(h.EntryPoints) != 2 || h.EntryPoints[0] != 5 || h.EntryPoints[1] != 10 {
 		t.Errorf("header %+v", h)
 	}
-	if h.DataOffset != len(u.Payload)-1 || u.Payload[h.DataOffset] != 0xAB {
+	if un := u.Unescape(); h.DataOffset != len(un)-16 || un[h.DataOffset] != 0xAB {
 		t.Errorf("DataOffset %d of %d: not the slice data", h.DataOffset, len(u.Payload))
 	}
 	if h.HeaderBits <= 0 || h.HeaderBits >= h.DataOffset*8 {
@@ -264,17 +290,18 @@ func TestSliceHeaderEntryPoints(t *testing.T) {
 		"tiles, 4 of at most 3":   {tiles, header(4, 3, 0, 1, 2, 3), true, nil},
 		"tiles and WPP, 7 of 7":   {both, header(7, 3, 0, 1, 2, 3, 4, 5, 6), false, []uint32{1, 2, 3, 4, 5, 6, 7}},
 		"tiles and WPP, 8 of 7":   {both, header(8, 3, 0, 1, 2, 3, 4, 5, 6, 7), true, nil},
-		"20-bit offsets":          {wpp, header(1, 19, 0xABCDE), false, []uint32{0xABCDF}},
-		"32-bit offsets, the top": {wpp, header(1, 31, 0xFFFFFFFE), false, []uint32{0xFFFFFFFF}},
+		"20-bit offsets":          {wpp, header(1, 19, 0xA), false, []uint32{0xB}},
+		"32-bit offsets":          {wpp, header(1, 31, 2), false, []uint32{3}},
+		"32-bit offsets, the top": {wpp, header(1, 31, 0xFFFFFFFE), true, nil}, // 2^32-1 bytes of data are not there
 		"32-bit offsets, 2^32":    {wpp, header(1, 31, 0xFFFFFFFF), true, nil},
 		"offset_len_minus1 of 32": {wpp, func(w *writer) { header(1, 0)(w); w.zeros(0) }, true, nil},
 	} {
-		u := hdrUnit(UnitIDRWRADL, c.fn)
+		data := 1 // slice data after the header: enough for the offsets
+		for _, v := range c.want {
+			data += int(v)
+		}
+		u := hdrUnitN(UnitIDRWRADL, c.fn, data)
 		if name == "offset_len_minus1 of 32" {
-			u = hdrUnit(UnitIDRWRADL, func(w *writer) {
-				header(0, 0)(w)
-			})
-			// Patch in n=1, len 32 by hand: rewrite the tail.
 			u = hdrUnit(UnitIDRWRADL, func(w *writer) {
 				w.bit(1)
 				w.bit(0)

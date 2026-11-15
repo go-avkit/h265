@@ -591,6 +591,9 @@ func (s *SPS) chromaUnits() (subW, subH uint64) {
 type sticky struct {
 	r   *bitstream.Reader
 	err error
+	// elements counts the successful reads, one per syntax element for a reader
+	// that reads one element at a time (a slice segment header does).
+	elements int
 }
 
 func newSticky(data []byte) *sticky { return &sticky{r: bitstream.NewReader(data)} }
@@ -601,6 +604,7 @@ func (s *sticky) bit() uint32 {
 	}
 	v, err := s.r.Bit()
 	s.err = err
+	s.elements++
 	return v
 }
 
@@ -610,6 +614,7 @@ func (s *sticky) bits(n int) uint32 {
 	}
 	v, err := s.r.Bits(n)
 	s.err = err
+	s.elements++
 	return v
 }
 
@@ -634,6 +639,7 @@ func (s *sticky) se() int32 {
 	}
 	v, err := s.r.SE()
 	s.err = err
+	s.elements++
 	return v
 }
 
@@ -651,5 +657,6 @@ func (s *sticky) ue() uint32 {
 	}
 	v, err := s.r.UE()
 	s.err = err
+	s.elements++
 	return v
 }

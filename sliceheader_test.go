@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,9 +18,17 @@ import (
 // value of each element, the bit offset of the first and the offset where the
 // header ended (the first line that is not a syntax element), or -1.
 type sliceTrace struct {
-	vals       map[string]int64
+	vals map[string]int64
+	// all is every value of each element, in order: entry_point_offset_minus1 and
+	// the short-term set's gaps appear once per entry.
+	all        map[string][]int64
 	start, end int64
 }
+
+// elements is how many syntax elements the trace printed for the header: HM's
+// bit offset column counts elements, so the first slice_data line follows the
+// last header element at start+elements.
+func (s sliceTrace) elements() int64 { return s.end - s.start }
 
 var (
 	sliceMarker  = "=========== Slice ==========="
@@ -35,7 +44,7 @@ func sliceTraces(trace []byte) []sliceTrace {
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.Contains(line, sliceMarker) {
-			out = append(out, sliceTrace{vals: map[string]int64{}, start: -1, end: -1})
+			out = append(out, sliceTrace{vals: map[string]int64{}, all: map[string][]int64{}, start: -1, end: -1})
 			open = true
 			continue
 		}
@@ -52,6 +61,7 @@ func sliceTraces(trace []byte) []sliceTrace {
 			if _, seen := cur.vals[m[2]]; !seen {
 				cur.vals[m[2]] = v
 			}
+			cur.all[m[2]] = append(cur.all[m[2]], v)
 			continue
 		}
 		if m := leadingIntRe.FindStringSubmatch(line); m != nil && cur.start >= 0 {
@@ -71,6 +81,9 @@ func dedupe(in []sliceTrace) []sliceTrace {
 	var out []sliceTrace
 	for i, s := range in {
 		if i > 0 && equalVals(s.vals, in[i-1].vals) {
+			// The second print is the one followed by a numbered line, so the one
+			// whose end is known.
+			out[len(out)-1] = s
 			continue
 		}
 		out = append(out, s)
@@ -120,6 +133,60 @@ var sliceOptional = []struct {
 	{[]string{"slice_tc_offset_div2"}, func(h SliceHeader) int64 { return int64(h.TCOffsetDiv2) }},
 	{[]string{"slice_loop_filter_across_slices_enabled_flag"}, func(h SliceHeader) int64 { return b2i(h.LoopFilterAcrossSlices) }},
 	{[]string{"num_entry_point_offsets"}, func(h SliceHeader) int64 { return int64(len(h.EntryPoints)) }},
+}
+
+// compareLists checks what the trace prints once per entry: the entry point
+// offsets, and the short-term set when the slice states it outright. (The traced
+// streams carry no long-term pictures, so those fields have no oracle here; see
+// TestLongTermBounds.) It returns how many values it compared.
+func compareLists(t *testing.T, where string, h SliceHeader, tr sliceTrace) int {
+	t.Helper()
+	n := 0
+	if got, want := h.EntryPoints, tr.all["entry_point_offset_minus1"]; len(got) != len(want) {
+		t.Errorf("%s: %d entry points, the trace's %d", where, len(got), len(want))
+	} else {
+		for i := range got {
+			n++
+			if int64(got[i])-1 != want[i] {
+				t.Errorf("%s: entry point %d: %d, the trace's %d", where, i, int64(got[i])-1, want[i])
+			}
+		}
+	}
+	if _, stated := tr.vals["num_negative_pics"]; stated && tr.vals["inter_ref_pic_set_prediction_flag"] == 0 {
+		set := h.Refs.ShortTerm
+		if int64(len(set.Before)) != tr.vals["num_negative_pics"] || int64(len(set.After)) != tr.vals["num_positive_pics"] {
+			t.Errorf("%s: set of %d+%d, the trace's %d+%d", where, len(set.Before), len(set.After), tr.vals["num_negative_pics"], tr.vals["num_positive_pics"])
+			return n
+		}
+		var gaps0, used0, gaps1, used1 []int64
+		prev := int32(0)
+		for _, e := range set.Before {
+			gaps0, used0 = append(gaps0, int64(prev-e.DeltaPOC-1)), append(used0, b2i(e.Used))
+			prev = e.DeltaPOC
+		}
+		prev = 0
+		for _, e := range set.After {
+			gaps1, used1 = append(gaps1, int64(e.DeltaPOC-prev-1)), append(used1, b2i(e.Used))
+			prev = e.DeltaPOC
+		}
+		for name, got := range map[string][]int64{
+			"delta_poc_s0_minus1": gaps0, "used_by_curr_pic_s0_flag": used0,
+			"delta_poc_s1_minus1": gaps1, "used_by_curr_pic_s1_flag": used1,
+		} {
+			want := tr.all[name]
+			if len(got) != len(want) {
+				t.Errorf("%s: %s has %d entries, the trace's %d", where, name, len(got), len(want))
+				continue
+			}
+			for i := range got {
+				n++
+				if got[i] != want[i] {
+					t.Errorf("%s: %s[%d] = %d, the trace's %d", where, name, i, got[i], want[i])
+				}
+			}
+		}
+	}
+	return n
 }
 
 // TestEverySliceHeaderOfTheConformanceSuite parses every slice segment header of
@@ -194,6 +261,17 @@ func TestEverySliceHeaderOfTheConformanceSuite(t *testing.T) {
 							}
 						}
 					}
+					// The length oracle: HM's offset column counts elements, so the
+					// first line after the header is at start + (elements in it).
+					// A header that stops one element short or runs one over
+					// differs here, whatever its values say.
+					if tr.end >= 0 {
+						lengths++
+						if int64(h.HeaderElements) != tr.elements() {
+							t.Errorf("%s: slice %d: %d header elements, the trace's %d", rel, n, h.HeaderElements, tr.elements())
+						}
+					}
+					fields += compareLists(t, fmt.Sprintf("%s: slice %d", rel, n), h, tr)
 					compared++
 				}
 				slices++
@@ -208,6 +286,11 @@ func TestEverySliceHeaderOfTheConformanceSuite(t *testing.T) {
 	}
 	if slices != wantSlices || refused != wantSlicesRefused {
 		t.Fatalf("%d slice headers parsed, %d with refused parameter sets; want %d and %d", slices, refused, wantSlices, wantSlicesRefused)
+	}
+	// ⛔ A counter that stays 0 is a check that could not read: the length oracle
+	// must have compared headers, and every traced header has a known end.
+	if lengths == 0 || lengths != compared {
+		t.Fatalf("lengths compared %d of %d traced headers", lengths, compared)
 	}
 	t.Logf("conformance-count: slices=%d refused=%d traced=%d fields=%d lengths=%d", slices, refused, compared, fields, lengths)
 }
