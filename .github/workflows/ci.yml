@@ -52,7 +52,7 @@ jobs:
       # A run that executed nothing would be green: name the passes.
       - name: the tests ran
         run: |
-          for t in TestEverySPSOfTheConformanceSuiteParses TestSPSAgainstTheTraces; do
+          for t in TestEverySPSOfTheConformanceSuiteParses TestSPSAgainstTheTraces TestEveryPPSOfTheConformanceSuiteParses TestPPSAgainstTheTraces; do
             grep -q -- "--- PASS: $t" conformance.log || { echo "::error::$t did not pass"; exit 1; }
           done
 

@@ -97,6 +97,13 @@ func TestPPSOtherExtensions(t *testing.T) {
 	}
 }
 
+func TestPPSExtensionFlagsPastTheEnd(t *testing.T) {
+	// pps_extension_present_flag is the last bit: eight flag bits are missing.
+	if _, err := (&PPS{}).readExtensions(newSticky([]byte{0x80})); err == nil {
+		t.Error("extension flags past the end accepted")
+	}
+}
+
 func TestPPSBoundsRefusals(t *testing.T) {
 	big := [2]int32{13, 0}
 	for name, p := range map[string]pset{
