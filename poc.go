@@ -154,7 +154,12 @@ func walkToPOC(u Unit, sps SPS, pps PPS) (*sticky, uint32, SliceType, error) {
 	for i := uint8(0); i < pps.ExtraSliceHeaderBits; i++ {
 		r.bit()
 	}
-	sliceType := SliceType(r.ue())
+	// ⛔ Bounded before it is narrowed: SliceType(256) is 0, a B slice.
+	rawType := r.ue()
+	if r.err == nil && rawType > uint32(SliceI) {
+		return nil, 0, 0, fmt.Errorf("%w: slice type %d", ErrSliceHeader, rawType)
+	}
+	sliceType := SliceType(rawType)
 	if pps.OutputFlagPresent {
 		r.bit() // pic_output_flag
 	}
@@ -167,12 +172,6 @@ func walkToPOC(u Unit, sps SPS, pps PPS) (*sticky, uint32, SliceType, error) {
 	lsb := r.bits(int(sps.Log2MaxPOCLSB))
 	if r.err != nil {
 		return nil, 0, 0, r.err
-	}
-	// ⛔ 7.4.7.1 names only three values. A fourth would make every test on the
-	// type below answer "not P, not B", which reads as an I slice rather than
-	// as the malformed header it is.
-	if sliceType > SliceI {
-		return nil, 0, 0, fmt.Errorf("%w: slice type %d", ErrSliceHeader, uint32(sliceType))
 	}
 	return r, lsb, sliceType, nil
 }

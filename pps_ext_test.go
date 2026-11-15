@@ -350,7 +350,7 @@ func TestPPSAgainstTheTraces(t *testing.T) {
 
 func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 	p := conformance(t)
-	n := 0
+	n, validated := 0, 0
 	for _, rel := range p.streams() {
 		units, err := SplitAnnexB(p.read(t, rel))
 		if err != nil {
@@ -372,6 +372,7 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 				}
 				// Checked against the sequence it names, when that one parsed.
 				if s, ok := spsByID[pps.SPSID]; ok {
+					validated++
 					if err := pps.Validate(s); err != nil {
 						t.Errorf("%s: %v", rel, err)
 					}
@@ -382,12 +383,21 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 	if n != wantPPSSets {
 		t.Fatalf("%d picture parameter sets in the suite, want %d", n, wantPPSSets)
 	}
-	t.Logf("conformance-count: pps sets=%d", n)
+	// A PPS whose SPS was refused (bypass alignment) is parsed but cannot be
+	// validated: the number that were is asserted too, not only the number parsed.
+	if validated != wantPPSValidated {
+		t.Fatalf("%d picture parameter sets validated, want %d", validated, wantPPSValidated)
+	}
+	t.Logf("conformance-count: pps sets=%d validated=%d", n, validated)
 }
 
 // wantPPSSets is how many picture parameter sets the pinned HEVC_v1 and RExt
 // streams hold (counted when the manifests were written).
 const wantPPSSets = 1310
+
+// wantPPSValidated is how many of them name an SPS that parsed (the streams that
+// enable cabac_bypass_alignment have a refused SPS, 34 sets in all).
+const wantPPSValidated = 1276
 
 // wideUE writes an Exp-Golomb code of n leading zeros by hand: writer.ue cannot
 // reach 2^32-1, which is the value a +1 wraps on.

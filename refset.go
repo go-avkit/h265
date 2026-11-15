@@ -188,19 +188,23 @@ func parseShortTermRPSExplicit(r *sticky) (ShortTermRPS, error) {
 	// against a running total rather than on its own.
 	prev := int32(0)
 	for i := uint32(0); i < nNeg; i++ {
-		d := int32(r.ue()) + 1
-		if d < 1 || d > 32768 {
-			return ShortTermRPS{}, fmt.Errorf("%w: a gap of %d between references", ErrUnsupportedSPS, d)
+		// ⛔ delta_poc_s0_minus1 is 0 to 2^15-1, checked on the raw value: after
+		// int32(...)+1 a huge one is negative or zero and only `d < 1` caught it.
+		raw := r.ue()
+		if r.err == nil && raw > 32767 {
+			return ShortTermRPS{}, fmt.Errorf("%w: a gap of %d between references", ErrUnsupportedSPS, uint64(raw)+1)
 		}
+		d := int32(raw) + 1
 		prev -= d
 		out.Before = append(out.Before, RefPic{prev, r.flag()})
 	}
 	prev = 0
 	for i := uint32(0); i < nPos; i++ {
-		d := int32(r.ue()) + 1
-		if d < 1 || d > 32768 {
-			return ShortTermRPS{}, fmt.Errorf("%w: a gap of %d between references", ErrUnsupportedSPS, d)
+		raw := r.ue() // delta_poc_s1_minus1, as above
+		if r.err == nil && raw > 32767 {
+			return ShortTermRPS{}, fmt.Errorf("%w: a gap of %d between references", ErrUnsupportedSPS, uint64(raw)+1)
 		}
+		d := int32(raw) + 1
 		prev += d
 		out.After = append(out.After, RefPic{prev, r.flag()})
 	}
