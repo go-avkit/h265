@@ -17,7 +17,7 @@ import (
 // their reconstruction to run without error.
 func TestIntraPicturesOfTheConformanceSuiteMatchTheirHashes(t *testing.T) {
 	p := conformance(t)
-	var verified, mismatched, unfiltered, unhashed, skippedPics int
+	var verified, mismatched, skippedPics int
 	for _, rel := range p.streams() {
 		list, err := SplitAnnexB(p.read(t, rel))
 		if err != nil {
@@ -30,7 +30,7 @@ func TestIntraPicturesOfTheConformanceSuiteMatchTheirHashes(t *testing.T) {
 		var frame *DecodedPicture
 		var curSPS SPS
 		var curPPS PPS
-		allI, saoOff, ok, have, deblocked := true, true, true, false, false
+		allI, ok, have, filtered := true, true, false, false
 		n := 0
 		for _, u := range list {
 			switch {
@@ -75,14 +75,11 @@ func TestIntraPicturesOfTheConformanceSuiteMatchTheirHashes(t *testing.T) {
 				}
 				if first || pic == nil {
 					pic, frame, curSPS, curPPS = NewPictureState(sps, l), NewDecodedPicture(sps), sps, pps
-					allI, saoOff, ok, have, deblocked = true, true, true, true, false
+					allI, ok, have, filtered = true, true, true, false
 					n++
 				}
 				if h.Type != SliceI {
 					allI = false
-				}
-				if h.Refs.SAOLuma || h.Refs.SAOChroma {
-					saoOff = false
 				}
 				if !allI || !ok {
 					continue
@@ -104,15 +101,14 @@ func TestIntraPicturesOfTheConformanceSuiteMatchTheirHashes(t *testing.T) {
 					if err != nil || !valid {
 						continue
 					}
-					if allI && ok && !deblocked {
+					if allI && ok && !filtered {
 						pic.Deblock(frame, curSPS, curPPS)
-						deblocked = true
+						pic.SAO(frame, curSPS, curPPS)
+						filtered = true
 					}
 					switch {
 					case !allI || !ok:
 						skippedPics++
-					case !saoOff:
-						unfiltered++
 					default:
 						if err := hash.Verify(frame); err != nil {
 							mismatched++
@@ -124,9 +120,8 @@ func TestIntraPicturesOfTheConformanceSuiteMatchTheirHashes(t *testing.T) {
 				}
 			}
 		}
-		_ = unhashed
 	}
-	t.Log(fmt.Sprintf("conformance-count: intra-hash verified=%d mismatched=%d filtered-not-compared=%d", verified, mismatched, unfiltered))
+	t.Log(fmt.Sprintf("conformance-count: intra-hash verified=%d mismatched=%d inter-not-reconstructed=%d", verified, mismatched, skippedPics))
 	if verified == 0 || mismatched != 0 {
 		t.Fatalf("%d pictures match their hash, %d do not", verified, mismatched)
 	}
