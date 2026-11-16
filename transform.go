@@ -125,9 +125,9 @@ func Residual(levels []int32, p BlockParams, out []int32) error {
 		}
 		return nil
 	}
-	d := make([]int64, n*n)
+	var dbuf, rbuf [1024]int64 // on the stack: a block is at most 32 x 32
+	d, r := dbuf[:n*n], rbuf[:n*n]
 	p.scale(levels, d)
-	r := make([]int64, n*n)
 	bdShift := uint(max(20-p.BitDepth, 0))
 	if p.ExtendedPrecision {
 		bdShift = uint(max(20-p.BitDepth, 11))
@@ -140,6 +140,16 @@ func Residual(levels []int32, p BlockParams, out []int32) error {
 				v = d[n*n-1-i]
 			}
 			r[i] = v << tsShift // (8-298)
+		}
+	} else if !p.ExtendedPrecision {
+		// The coefficients are 16-bit here, so 32-bit sums cannot overflow (see transformfast.go).
+		var d32, r32 [1024]int32
+		for i := range d {
+			d32[i] = int32(d[i])
+		}
+		transform2DFast(&d32, &r32, n, p.Intra && n == 4 && p.CIdx == 0)
+		for i := range r {
+			r[i] = int64(r32[i])
 		}
 	} else {
 		lo, hi := p.coeffRange()
