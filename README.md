@@ -56,24 +56,31 @@ yuv file) that the suite ships: 45 of the 52 such streams it decodes match; the 
 
 ### Speed
 
-v0.18.0 runs the HEVC kernels of go-videodsp/kernels (interpolation, SAO,
-weighted prediction), with the output unchanged bit for bit (every conformance
-gate is the same; the md5 of four 1080p outputs equals ffmpeg's on an x86 host and
-on an Apple M4). Frames per second by CPU time, one core (AMD Ryzen 9 7950X,
-`taskset -c 5`, interleaved rounds, load about 1, 2026-11-16). The third-party
-decoder is the one go-avkit/decode v0.9.0 uses for HEVC, measured through
-`DecodeTrack`; ffmpeg is 6.1.1 with `-threads 1`.
+**Behaviour change in v0.19.0:** the planes of a picture returned by
+`Decoder.Output` are read-only views of the decoder's own pictures, not copies, and
+`Stride` can be larger than `Width`. A picture you keep stays valid and unchanged,
+but writing into its planes corrupts the decoding of later pictures that reference
+it. A caller that modifies samples must call `(*DecodedPicture).Clone()` first,
+which returns an owned, writable copy.
 
-| stream (1080p) | v0.17.0 | v0.18.0 | third-party | ffmpeg |
+v0.19.0 runs more of the HEVC kernels of go-videodsp/kernels (two-list average,
+inverse DCT and DST, vertical-only interpolation) and crops output as a view, with
+the output unchanged bit for bit (every conformance gate is the same; the md5 of
+four 1080p outputs equals ffmpeg's). Frames per second by CPU time, one core (AMD
+Ryzen 9 7950X, `taskset -c 5`, four runs of five rounds interleaved, load 0.15 to
+1.06, 2026-11-16). The third-party decoder is the one go-avkit/decode v0.9.0 uses
+for HEVC, measured through `DecodeTrack`; ffmpeg is 6.1.1 with `-threads 1`.
+
+| stream (1080p) | v0.18.0 | v0.19.0 | third-party | ffmpeg |
 |---|---|---|---|---|
-| alien, Main | 34.5 | 58.3 | 88.0 | 397 |
-| fade, Main | 36.7 | 53.8 | 80.4 | 436 |
-| alien, Main 10 | 35.5 | 60.4 | 30.1 | 306 |
-| alien8 | 38.3 | 66.6 | 96.0 | 438 |
+| alien, Main | 58.2 | 76.1 | 87.4 | 395 |
+| fade, Main | 53.8 | 68.8 | 80.0 | 430 |
+| alien, Main 10 | 60.1 | 79.3 | 30.0 | 303 |
+| alien8 | 66.6 | 85.6 | 95.3 | 429 |
 
-On 8-bit streams this decoder is still slower than the third-party one, an open
-defect, and far slower than ffmpeg on every stream; on Main 10 it is twice as fast
-as the third-party decoder. No parity is claimed.
+On 8-bit streams this decoder is still slower than the third-party one, at 0.86 to
+0.90 of its speed, an open defect; on Main 10 it is 2.6 times as fast. It runs at
+0.16 to 0.26 of ffmpeg's speed. No parity is claimed.
 
 **Security fix in v0.16.0:** on a hostile SPS (a picture width or height that is
 not a multiple of the minimum coding block size) v0.14.0 and v0.15.0 could panic
