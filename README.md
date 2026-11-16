@@ -21,8 +21,11 @@ pics, err := h265.SplitPictures(units, pps)   // without decoding any
 
 **It is not a finished decoder.** It carries the parts of one of our own, and
 the pieces are not yet joined into a decoding API: the conformance test drives
-them picture by picture. Every hashed picture of the suite that it decodes
-(intra and inter, 7147 of them) matches its decoded picture hash SEI. What it has:
+them picture by picture. Since v0.15.0, every hashed picture of the suite
+(7147 verified, 6638 of them inter, 0 mismatched) matches its decoded picture
+hash SEI; CI pins these counts. **Not verified yet:** the 3091 pictures of the 59
+streams that carry no hash SEI ([#48](https://github.com/go-avkit/h265/issues/48)).
+What it has:
 
 - the CABAC engine and the full slice-data syntax (7.3.8): all 52215 slices of
   the conformance suite (v1 and RExt) walk to their last bit;
@@ -38,7 +41,6 @@ them picture by picture. Every hashed picture of the suite that it decodes
 - SEI parsing and the decoded picture hash (MD5, CRC, checksum).
 
 `decode` does not use it: it still wraps a third-party decoder for HEVC.
-
 **Behaviour change in v0.14.0:** `Unit.TemporalID` is now TemporalId (0 for the
 base layer, as 7.4.2.2 defines it); every version up to v0.13.2 returned
 TemporalId + 2. A unit stating `nuh_temporal_id_plus1 = 0` is refused with
