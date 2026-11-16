@@ -33,6 +33,7 @@ func (ps *PictureState) initDeblocking(sps SPS) {
 	ps.NoFilter = make([]bool, len(ps.CtDepth))
 	ps.DbBeta = make([]int8, len(ps.Sao))
 	ps.DbTc = make([]int8, len(ps.Sao))
+	ps.DbAcross = make([]bool, len(ps.Sao))
 }
 
 // beginDeblockCU derives filterLeftCbEdgeFlag and filterTopCbEdgeFlag of the

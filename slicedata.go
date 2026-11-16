@@ -60,7 +60,9 @@ type PictureState struct {
 	Cbf4         []bool
 	NoFilter     []bool
 	DbBeta, DbTc []int8
-	Motion       []Motion
+	// DbAcross is slice_loop_filter_across_slices_enabled_flag per CTB.
+	DbAcross []bool
+	Motion   []Motion
 	// QpY is QpY of each coding unit on the grid of CtDepth; lastQpY is the QpY of
 	// the last coding unit decoded, which a dependent slice segment continues from.
 	QpY     []int8
@@ -177,6 +179,7 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 		w.ctbAddrRs = rs
 		ps.SliceAddr[rs] = int32(hdr.SliceAddrRs)
 		ps.DbBeta[rs], ps.DbTc[rs] = int8(hdr.BetaOffsetDiv2), int8(hdr.TCOffsetDiv2)
+		ps.DbAcross[rs] = hdr.LoopFilterAcrossSlices
 		x0, y0 := (rs%l.WidthCtbs)<<sps.Log2CtbSize, (rs/l.WidthCtbs)<<sps.Log2CtbSize
 		firstInTile := ts == 0 || l.TileID[ts] != l.TileID[ts-1]
 		rowStart := pps.EntropySyncEnabled && (rs%l.WidthCtbs == 0 || l.TileID[ts] != l.TileID[l.RsToTs[rs-1]])

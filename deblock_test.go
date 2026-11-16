@@ -579,3 +579,183 @@ func TestPredictionBlockEdges(t *testing.T) {
 		}
 	}
 }
+
+// refSAO is 8.7.3 as the text has it, over the picture refDeblock left: every
+// coding tree block, component and sample, with the conditions of 8.7.3.2 on the
+// neighbours stated by the comparison of MinTbAddrZs and the slice's flag.
+func refSAO(ww *walkWriter, frame *DecodedPicture, plans []segPlan) {
+	s := &ww.sps
+	l := ww.l
+	hdrAt := func(x, y int) SliceHeader {
+		ctb := uint(s.Log2CtbSize)
+		sa := ww.sliceOf[(y>>ctb)*l.WidthCtbs+x>>ctb]
+		for _, p := range plans {
+			if int32(p.hdr.SliceAddrRs) == sa {
+				return p.hdr
+			}
+		}
+		panic("no slice")
+	}
+	sliceAt := func(x, y int) int32 {
+		ctb := uint(s.Log2CtbSize)
+		return ww.sliceOf[(y>>ctb)*l.WidthCtbs+x>>ctb]
+	}
+	tileAt := func(x, y int) int32 {
+		ctb := uint(s.Log2CtbSize)
+		return l.TileID[l.RsToTs[(y>>ctb)*l.WidthCtbs+x>>ctb]]
+	}
+	cuAt := make(map[int]*CodingUnit)
+	for i := range ww.expect {
+		cu := &ww.expect[i]
+		for y := cu.Y; y < cu.Y+1<<uint(cu.Log2Size); y += 1 << s.Log2MinCbSize {
+			for x := cu.X; x < cu.X+1<<uint(cu.Log2Size); x += 1 << s.Log2MinCbSize {
+				cuAt[ww.cell(x, y)] = cu
+			}
+		}
+	}
+	hPos := [4][2]int{{-1, 1}, {0, 0}, {-1, 1}, {1, -1}}
+	vPos := [4][2]int{{0, 0}, {-1, 1}, {-1, 1}, {-1, 1}}
+	zs := func(x, y int) int { return l.MinTbAddrZs(x>>uint(s.Log2MinTbSize), y>>uint(s.Log2MinTbSize)) }
+	for c := 0; c < frame.Components; c++ {
+		pl := &frame.Planes[c]
+		rec := append([]uint16(nil), pl.Pix...)
+		subW, subH := int(s.CodedWidth)/pl.Width, int(s.CodedHeight)/pl.Height
+		bd := int(s.BitDepthLuma)
+		if c > 0 {
+			bd = int(s.BitDepthChroma)
+		}
+		nW, nH := (1<<uint(s.Log2CtbSize))/subW, (1<<uint(s.Log2CtbSize))/subH
+		for ry := 0; ry < l.HeightCtbs; ry++ {
+			for rx := 0; rx < l.WidthCtbs; rx++ {
+				p := ww.sao[ry*l.WidthCtbs+rx]
+				for j := 0; j < nH; j++ {
+					for i := 0; i < nW; i++ {
+						xs, ys := rx*nW+i, ry*nH+j
+						if xs >= pl.Width || ys >= pl.Height {
+							continue
+						}
+						xy, yy := xs*subW, ys*subH
+						cu := cuAt[ww.cell(xy, yy)]
+						if (cu.PCM && s.PCM.LoopFilterDisabled) || cu.TransquantBypass || p.Type[c] == 0 {
+							continue
+						}
+						cur := int(rec[ys*pl.Stride+xs])
+						var offs int
+						if p.Type[c] == 2 {
+							edgeIdx := 0
+							skip := false
+							for k := 0; k < 2; k++ {
+								xk, yk := xs+hPos[p.EoClass[c]][k], ys+vPos[p.EoClass[c]][k]
+								xyk, yyk := xk*subW, yk*subH
+								if xk < 0 || yk < 0 || xk >= pl.Width || yk >= pl.Height {
+									skip = true
+									break
+								}
+								if sliceAt(xyk, yyk) != sliceAt(xy, yy) {
+									if zs(xyk, yyk) < zs(xy, yy) && !hdrAt(xy, yy).LoopFilterAcrossSlices {
+										skip = true
+										break
+									}
+									if zs(xy, yy) < zs(xyk, yyk) && !hdrAt(xyk, yyk).LoopFilterAcrossSlices {
+										skip = true
+										break
+									}
+								}
+								if !ww.pps.LoopFilterAcrossTiles && tileAt(xyk, yyk) != tileAt(xy, yy) {
+									skip = true
+									break
+								}
+							}
+							if !skip {
+								sgn := func(v int) int {
+									if v > 0 {
+										return 1
+									} else if v < 0 {
+										return -1
+									}
+									return 0
+								}
+								a := int(rec[(ys+vPos[p.EoClass[c]][0])*pl.Stride+xs+hPos[p.EoClass[c]][0]])
+								b := int(rec[(ys+vPos[p.EoClass[c]][1])*pl.Stride+xs+hPos[p.EoClass[c]][1]])
+								edgeIdx = 2 + sgn(cur-a) + sgn(cur-b)
+								if edgeIdx == 0 || edgeIdx == 1 || edgeIdx == 2 {
+									if edgeIdx == 2 {
+										edgeIdx = 0
+									} else {
+										edgeIdx++
+									}
+								}
+							}
+							if edgeIdx != 0 {
+								offs = int(p.Offset[c][edgeIdx-1])
+							}
+						} else {
+							bandTable := make([]int, 32)
+							for k := 0; k < 4; k++ {
+								bandTable[(k+int(p.BandPos[c]))&31] = k + 1
+							}
+							if bandIdx := bandTable[cur>>uint(bd-5)]; bandIdx != 0 {
+								offs = int(p.Offset[c][bandIdx-1])
+							}
+						}
+						pl.Pix[ys*pl.Stride+xs] = uint16(min(max(cur+offs, 0), 1<<uint(bd)-1))
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestSampleAdaptiveOffsetAgainstTheSpecificationText(t *testing.T) {
+	rng := rand.New(rand.NewPCG(171, 172))
+	var changed, total int
+	for iter := 0; iter < 400; iter++ {
+		ww, ps, plans := deblockCase(t, rng)
+		frame := NewDecodedPicture(ww.sps)
+		rec := NewReconstructor(frame, ww.sps, ww.pps)
+		for si, p := range plans {
+			payload, hdr := ww.writeSegment(p)
+			if err := DecodeSliceData(ps, Unit{Type: UnitTrailR, Payload: payload}, hdr, ww.pps, rec.Decoder()); err != nil {
+				t.Fatalf("iter %d segment %d: %v", iter, si, err)
+			}
+		}
+		ref := newRefRecon(ww)
+		for ci := range ww.expect {
+			cu := &ww.expect[ci]
+			if cu.PCM {
+				ref.pcm(cu)
+			}
+			for ti := range ww.expectTU {
+				if ww.tuCU[ti] == ci {
+					ref.unit(cu, &ww.expectTU[ti])
+				}
+			}
+		}
+		ps.Deblock(frame, ww.sps, ww.pps)
+		refDeblock(ww, ref.frame, plans)
+		deblocked := make([][]uint16, frame.Components)
+		for c := range deblocked {
+			deblocked[c] = append([]uint16(nil), frame.Planes[c].Pix...)
+		}
+		ps.SAO(frame, ww.sps, ww.pps)
+		refSAO(ww, ref.frame, plans)
+		for c := 0; c < frame.Components; c++ {
+			total++
+			if !reflect.DeepEqual(frame.Planes[c].Pix, deblocked[c]) {
+				changed++
+			}
+			if !reflect.DeepEqual(frame.Planes[c].Pix, ref.frame.Planes[c].Pix) {
+				w := frame.Planes[c].Width
+				for i := range frame.Planes[c].Pix {
+					if frame.Planes[c].Pix[i] != ref.frame.Planes[c].Pix[i] {
+						t.Fatalf("iter %d: component %d differs at (%d,%d): %d, the text's %d", iter, c, i%w, i/w, frame.Planes[c].Pix[i], ref.frame.Planes[c].Pix[i])
+					}
+				}
+			}
+		}
+	}
+	t.Logf("%d of %d planes were changed by SAO", changed, total)
+	if changed < total/4 {
+		t.Error("SAO changed too little to be tested")
+	}
+}
