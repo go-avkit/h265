@@ -323,6 +323,11 @@ func (s *SPS) readCodingBlockSizes(r *sticky) error {
 		return fmt.Errorf("%w: transform blocks of %d to %d in coding blocks of %d to %d",
 			ErrUnsupportedSPS, 1<<s.Log2MinTbSize, 1<<s.Log2MaxTbSize, 1<<s.Log2MinCbSize, 1<<s.Log2CtbSize)
 	}
+	// pic_width_in_luma_samples and pic_height_in_luma_samples are integer multiples of
+	// MinCbSizeY (7.4.3.2.1): a coding block never reaches past the picture.
+	if mask := uint32(1)<<s.Log2MinCbSize - 1; s.CodedWidth&mask != 0 || s.CodedHeight&mask != 0 {
+		return fmt.Errorf("%w: a picture of %dx%d with coding blocks of %d", ErrUnsupportedSPS, s.CodedWidth, s.CodedHeight, 1<<s.Log2MinCbSize)
+	}
 	// max_transform_hierarchy_depth_*: 0 to CtbLog2SizeY - MinTbLog2SizeY.
 	if limit := uint32(s.Log2CtbSize - s.Log2MinTbSize); depthInter > limit || depthIntra > limit {
 		return fmt.Errorf("%w: transform hierarchy depths %d and %d", ErrUnsupportedSPS, depthInter, depthIntra)
