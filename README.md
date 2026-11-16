@@ -56,23 +56,24 @@ yuv file) that the suite ships: 45 of the 52 such streams it decodes match; the 
 
 ### Speed
 
-v0.17.0 is 2.6x faster than v0.16.0 with the output unchanged bit for bit (every
-conformance gate is the same; the md5 of four 1080p outputs equals ffmpeg's).
-Frames per second by CPU time, one core (AMD Ryzen 9 7950X, `taskset`, interleaved
-rounds, load 0.5 to 3, 2026-11-16). The third-party decoder is the one
-go-avkit/decode v0.9.0 uses for HEVC, measured through `DecodeTrack`; ffmpeg is
-6.1.1 with `-threads 1`.
+v0.18.0 runs the HEVC kernels of go-videodsp/kernels (interpolation, SAO,
+weighted prediction), with the output unchanged bit for bit (every conformance
+gate is the same; the md5 of four 1080p outputs equals ffmpeg's on an x86 host and
+on an Apple M4). Frames per second by CPU time, one core (AMD Ryzen 9 7950X,
+`taskset -c 5`, interleaved rounds, load about 1, 2026-11-16). The third-party
+decoder is the one go-avkit/decode v0.9.0 uses for HEVC, measured through
+`DecodeTrack`; ffmpeg is 6.1.1 with `-threads 1`.
 
-| stream (1080p, 240 or 120 frames) | v0.16.0 | v0.17.0 | third-party | ffmpeg |
+| stream (1080p) | v0.17.0 | v0.18.0 | third-party | ffmpeg |
 |---|---|---|---|---|
-| alien, Main | 13.5 | 34.5 | 88 | 396 |
-| fade, Main | 13.8 | 36.7 | 80 | 427 |
-| alien, Main 10 | 13.3 | 35.5 | 30.0 | 300 |
-| alien8 | 15.4 | 38.3 | 95 | 430 |
+| alien, Main | 34.5 | 58.3 | 88.0 | 397 |
+| fade, Main | 36.7 | 53.8 | 80.4 | 436 |
+| alien, Main 10 | 35.5 | 60.4 | 30.1 | 306 |
+| alien8 | 38.3 | 66.6 | 96.0 | 438 |
 
-This decoder is still slower than the third-party one on 8-bit streams, an open
-defect, and far from ffmpeg on every stream; it is faster than the third-party
-decoder on Main 10 only. SIMD kernels are next. No parity is claimed.
+On 8-bit streams this decoder is still slower than the third-party one, an open
+defect, and far slower than ffmpeg on every stream; on Main 10 it is twice as fast
+as the third-party decoder. No parity is claimed.
 
 **Security fix in v0.16.0:** on a hostile SPS (a picture width or height that is
 not a multiple of the minimum coding block size) v0.14.0 and v0.15.0 could panic
