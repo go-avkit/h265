@@ -49,6 +49,15 @@ type Options struct {
 
 // Output is a picture the decoder outputs: cut to the conformance window, in output
 // order (C.5.2.4).
+//
+// Lifetime. Every decoded picture is its own allocation, which the decoder never recycles
+// and never writes again once it is decoded, so Picture stays valid and unchanged for as
+// long as the caller keeps it (the garbage collector frees it with the last reference).
+// Its planes are views of the decoder's picture (cut to the conformance window, so a plane's
+// Stride can be larger than its Width, and a plane's Pix runs to its last sample): the same
+// memory the decoder reads as a reference picture for later ones. The caller must therefore
+// treat the planes as read-only: writing to them changes the pictures predicted from this
+// one. Copy the plane first to modify it.
 type Output struct {
 	Picture *DecodedPicture
 	POC     int32
