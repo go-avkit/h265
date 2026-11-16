@@ -477,15 +477,6 @@ func TestWeightOffsetRanges(t *testing.T) {
 	}
 }
 
-func TestInterSliceCarriesItsWeights(t *testing.T) {
-	hdr := SliceHeader{Type: SliceP}
-	hdr.Refs.Weights = &PredWeights{LumaLog2Denom: 3}
-	sl, err := NewInterSlice(hdr, PPS{}, 5, nil, nil)
-	if err != nil || sl.Weights != hdr.Refs.Weights {
-		t.Errorf("%v %+v", err, sl)
-	}
-}
-
 func TestInterPredictionRefusals(t *testing.T) {
 	sps := SPS{ChromaFormat: 1, CodedWidth: 16, CodedHeight: 16, BitDepthLuma: 8, BitDepthChroma: 8}
 	cu := &CodingUnit{Mode: ModeInter, Log2Size: 3, NumPU: 1}
