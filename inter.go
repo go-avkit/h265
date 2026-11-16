@@ -160,12 +160,12 @@ func weightedKernel(pl *Plane, x0, y0, w, h int, p [2][]int32, bi bool, l int, b
 	}
 	off := y0*pl.Stride + x0
 	if bi {
-		return hevc.TryWeightBi(pl.Pix, off, pl.Stride, p[0], p[1], 0, w, w, h, bitDepth, log2Wd, w0, w1, o0, o1) == nil
+		return !kernelRefused("WeightBi", hevc.TryWeightBi(pl.Pix, off, pl.Stride, p[0], p[1], 0, w, w, h, bitDepth, log2Wd, w0, w1, o0, o1))
 	}
 	if l == 1 {
 		w0, o0 = w1, o1
 	}
-	return hevc.TryWeightUni(pl.Pix, off, pl.Stride, p[l], 0, w, w, h, bitDepth, log2Wd, w0, o0) == nil
+	return !kernelRefused("WeightUni", hevc.TryWeightUni(pl.Pix, off, pl.Stride, p[l], 0, w, w, h, bitDepth, log2Wd, w0, o0))
 }
 
 // fullPel is a block of a reference plane at a full-sample position inside the plane.

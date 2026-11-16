@@ -107,24 +107,57 @@ func coefficients4(taps []int32) (c [4]int16) {
 // the kernels refuse either, which then run in Go.
 func kernelHV(sc *interpScratch, src []uint16, ss, w, h, bitDepth int, tx, ty []int32, out []int32) bool {
 	if len(tx) == 4 { // chroma: four taps, one row before and two after
-		cx, cy := coefficients4(tx), coefficients4(ty)
-		return hevc.TryHPass4(sc.mid[:(h+3)*w], 0, w, src, 1, ss, w, h+3, bitDepth, &cx) == nil &&
-			hevc.TryVPass4(out, 0, w, sc.mid[:(h+3)*w], w, w, w, h, &cy) == nil
+		cy := coefficients4(ty)
+		return kernelH(sc, src, ss, w, h+3, bitDepth, tx) &&
+			!kernelRefused("VPass4", hevc.TryVPass4(out, 0, w, sc.mid[:(h+3)*w], w, w, w, h, &cy))
 	}
-	cx, cy := coefficients(tx), coefficients(ty)
-	return hevc.TryHPass8(sc.mid[:(h+7)*w], 0, w, src, 3, ss, w, h+7, bitDepth, &cx) == nil &&
-		hevc.TryVPass8(out, 0, w, sc.mid[:(h+7)*w], 3*w, w, w, h, &cy) == nil
+	cy := coefficients(ty)
+	return kernelH(sc, src, ss, w, h+7, bitDepth, tx) &&
+		!kernelRefused("VPass8", hevc.TryVPass8(out, 0, w, sc.mid[:(h+7)*w], 3*w, w, w, h, &cy))
 }
 
+// bandRows is the most rows one call of the kernels' passes takes. A block of 64 rows
+// needs 71 of them for the horizontal pass of a two-dimensional filter, so that pass runs
+// in bands.
+const bandRows = 64
+
 // kernelH runs the horizontal pass of the kernels package over rows rows into sc.mid
-// (int16, w per row); false when the kernels refuse the call, which then runs in Go.
+// (int16, w per row), in bands of at most bandRows; false when the kernels refuse a call,
+// which then runs in Go.
 func kernelH(sc *interpScratch, src []uint16, ss, w, rows, bitDepth int, taps []int32) bool {
+	dst := sc.mid[:rows*w]
 	if len(taps) == 4 {
 		c := coefficients4(taps)
-		return hevc.TryHPass4(sc.mid[:rows*w], 0, w, src, 1, ss, w, rows, bitDepth, &c) == nil
+		for r := 0; r < rows; r += bandRows {
+			if kernelRefused("HPass4", hevc.TryHPass4(dst, r*w, w, src, 1+r*ss, ss, w, min(bandRows, rows-r), bitDepth, &c)) {
+				return false
+			}
+		}
+		return true
 	}
 	c := coefficients(taps)
-	return hevc.TryHPass8(sc.mid[:rows*w], 0, w, src, 3, ss, w, rows, bitDepth, &c) == nil
+	for r := 0; r < rows; r += bandRows {
+		if kernelRefused("HPass8", hevc.TryHPass8(dst, r*w, w, src, 3+r*ss, ss, w, min(bandRows, rows-r), bitDepth, &c)) {
+			return false
+		}
+	}
+	return true
+}
+
+// kernelRefusal, when set, is called with the name of the entry point each time the
+// kernels refuse a call and the Go loops take over: a refusal is a silent slowdown, so the
+// tests count them (a shape the kernels claim to take must not be refused).
+var kernelRefusal func(name string, err error)
+
+// kernelRefused reports whether err is a refusal, and tells kernelRefusal.
+func kernelRefused(name string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if kernelRefusal != nil {
+		kernelRefusal(name, err)
+	}
+	return true
 }
 
 // hpass is the horizontal filter over rows rows of w samples: dst[y*w+x] is the sum of
