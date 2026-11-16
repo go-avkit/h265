@@ -3,7 +3,11 @@
 
 package h265
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/go-videodsp/kernels/hevc"
+)
 
 // The scaling and transformation process of 8.6.2 to 8.6.6 on one transform
 // block: levels in, residual samples out, in the arithmetic the specification
@@ -146,6 +150,15 @@ func Residual(levels []int32, p BlockParams, out []int32) error {
 		var d32, r32 [1024]int32
 		for i := range d {
 			d32[i] = int32(d[i])
+		}
+		var err error
+		if p.Intra && n == 4 && p.CIdx == 0 {
+			err = hevc.TryIDST4(out[:16], d32[:16], int(bdShift))
+		} else {
+			err = hevc.TryIDCT(out[:n*n], d32[:n*n], log2, int(bdShift))
+		}
+		if !kernelRefused("IDCT", err) {
+			return nil
 		}
 		transform2DFast(&d32, &r32, n, p.Intra && n == 4 && p.CIdx == 0)
 		for i := range r {
