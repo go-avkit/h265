@@ -31,26 +31,30 @@ var (
 // samples directly rather than in macroblocks, so there is no multiply -- but the
 // window still has to be taken off, and its offsets are in CHROMA units.
 type SPS struct {
-	VPSID          uint8
-	MaxSubLayers   uint8
-	ProfileSpace   uint8
-	Tier           uint8
-	ProfileIDC     uint8
-	LevelIDC       uint8
-	ID             uint32
-	ChromaFormat   uint8
-	SeparatePlanes bool
-	CodedWidth     uint32
-	CodedHeight    uint32
-	WinLeft        uint32
-	WinRight       uint32
-	WinTop         uint32
-	WinBottom      uint32
-	Width          uint32
-	Height         uint32
-	BitDepthLuma   uint8
-	BitDepthChroma uint8
-	Log2MaxPOCLSB  uint8
+	VPSID        uint8
+	MaxSubLayers uint8
+	// MaxDecPicBufferingMinus1, MaxNumReorderPics and MaxLatencyIncreasePlus1 are the
+	// sps_max_dec_pic_buffering_minus1, sps_max_num_reorder_pics and
+	// sps_max_latency_increase_plus1 of the highest sub-layer.
+	MaxDecPicBufferingMinus1, MaxNumReorderPics, MaxLatencyIncreasePlus1 uint32
+	ProfileSpace                                                         uint8
+	Tier                                                                 uint8
+	ProfileIDC                                                           uint8
+	LevelIDC                                                             uint8
+	ID                                                                   uint32
+	ChromaFormat                                                         uint8
+	SeparatePlanes                                                       bool
+	CodedWidth                                                           uint32
+	CodedHeight                                                          uint32
+	WinLeft                                                              uint32
+	WinRight                                                             uint32
+	WinTop                                                               uint32
+	WinBottom                                                            uint32
+	Width                                                                uint32
+	Height                                                               uint32
+	BitDepthLuma                                                         uint8
+	BitDepthChroma                                                       uint8
+	Log2MaxPOCLSB                                                        uint8
 	// ShortTermRefPicSets are the sets a slice may name instead of stating one
 	// of its own, in the order the sequence lists them. A set may be written as
 	// a difference from an earlier one, so the order is load-bearing.
@@ -284,9 +288,10 @@ func (s *SPS) skipSubLayerOrdering(r *sticky) {
 		start = int(s.MaxSubLayers) - 1
 	}
 	for i := start; i < int(s.MaxSubLayers); i++ {
-		r.ue() // sps_max_dec_pic_buffering_minus1
-		r.ue() // sps_max_num_reorder_pics
-		r.ue() // sps_max_latency_increase_plus1
+		// What the DPB of the highest sub-layer needs (C.5.2.2): the last set read.
+		s.MaxDecPicBufferingMinus1 = r.ue() // sps_max_dec_pic_buffering_minus1
+		s.MaxNumReorderPics = r.ue()        // sps_max_num_reorder_pics
+		s.MaxLatencyIncreasePlus1 = r.ue()  // sps_max_latency_increase_plus1
 	}
 }
 

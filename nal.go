@@ -10,7 +10,12 @@
 // the parameter sets hold. This package is that difference.
 package h265
 
-import "github.com/go-avkit/bitstream"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/go-avkit/bitstream"
+)
 
 // UnitType is what a NAL unit holds. Only the ones this package acts on are
 // named; the rest travel as their number.
@@ -67,8 +72,9 @@ type Unit struct {
 	// stream states zero throughout, and a decoder that ignored it would mix the
 	// layers of one that does not.
 	LayerID uint8
-	// TemporalID is the sub-layer, one more than the field on the wire. A stream
-	// can be thinned by dropping the higher ones, which is what it is for.
+	// TemporalID is TemporalId, the sub-layer: nuh_temporal_id_plus1 minus 1, so 0
+	// for the base layer. A stream can be thinned by dropping the higher ones,
+	// which is what it is for.
 	TemporalID uint8
 	Payload    []byte
 }
@@ -119,6 +125,10 @@ func SplitLengthPrefixed(data []byte, lengthSize int) ([]Unit, error) {
 	return units(raw)
 }
 
+// ErrTemporalIDPlus1 means a unit states nuh_temporal_id_plus1 equal to 0, which
+// 7.4.2.2 forbids.
+var ErrTemporalIDPlus1 = errors.New("h265: nuh_temporal_id_plus1 is 0")
+
 // units reads the two header bytes of each raw unit.
 //
 // ⛔ Two bytes, and a unit of one is refused rather than read: the second byte
@@ -132,11 +142,20 @@ func units(raw [][]byte) ([]Unit, error) {
 			return nil, &ShortHeaderError{Unit: i + 1, Bytes: len(body)}
 		}
 		// forbidden_zero_bit, then six bits of type, then six of layer, then
-		// three of temporal id plus one.
+		// three of nuh_temporal_id_plus1, which is never 0 (7.4.2.2).
+		//
+		// ⛔ The field on the wire IS the plus 1: TemporalId is that minus one. This
+		// used to add one instead, so TemporalID was TemporalId + 2 and no picture
+		// of a real stream was ever a base layer one, which made POCCounter carry
+		// nothing and every order count after the first wrong.
+		plus1 := body[1] & 0x7
+		if plus1 == 0 {
+			return nil, fmt.Errorf("%w: unit %d", ErrTemporalIDPlus1, i+1)
+		}
 		out = append(out, Unit{
 			Type:       UnitType(body[0] >> 1 & 0x3F),
 			LayerID:    uint8(body[0]&1)<<5 | body[1]>>3,
-			TemporalID: body[1]&0x7 + 1,
+			TemporalID: plus1 - 1,
 			Payload:    body[2:],
 		})
 	}

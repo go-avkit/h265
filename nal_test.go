@@ -12,10 +12,10 @@ import (
 )
 
 // header builds the two bytes this format spends on a unit header.
-func header(typ UnitType, layer, temporalMinus1 uint8) []byte {
+func header(typ UnitType, layer, temporalID uint8) []byte {
 	return []byte{
 		byte(typ)<<1 | layer>>5,
-		layer<<3 | temporalMinus1,
+		layer<<3 | (temporalID + 1), // nuh_temporal_id_plus1
 	}
 }
 
@@ -27,9 +27,9 @@ func header(typ UnitType, layer, temporalMinus1 uint8) []byte {
 // sub-layer out of payload.
 func TestBothHeaderBytesAreRead(t *testing.T) {
 	for _, tc := range []struct {
-		typ            UnitType
-		layer          uint8
-		temporalMinus1 uint8
+		typ        UnitType
+		layer      uint8
+		temporalID uint8
 	}{
 		{UnitIDRWRADL, 0, 0},
 		{UnitTrailR, 1, 2},
@@ -37,7 +37,7 @@ func TestBothHeaderBytesAreRead(t *testing.T) {
 		{UnitPrefixSEI, 63, 6},
 		{UnitCRA, 32, 3},
 	} {
-		stream := append([]byte{0, 0, 1}, header(tc.typ, tc.layer, tc.temporalMinus1)...)
+		stream := append([]byte{0, 0, 1}, header(tc.typ, tc.layer, tc.temporalID)...)
 		stream = append(stream, 'x')
 		units, err := SplitAnnexB(stream)
 		if err != nil {
@@ -55,8 +55,8 @@ func TestBothHeaderBytesAreRead(t *testing.T) {
 		if u.LayerID != tc.layer {
 			t.Errorf("type %d: LayerID = %d, want %d", tc.typ, u.LayerID, tc.layer)
 		}
-		if u.TemporalID != tc.temporalMinus1+1 {
-			t.Errorf("type %d: TemporalID = %d, want %d", tc.typ, u.TemporalID, tc.temporalMinus1+1)
+		if u.TemporalID != tc.temporalID {
+			t.Errorf("type %d: TemporalID = %d, want %d", tc.typ, u.TemporalID, tc.temporalID)
 		}
 		if string(u.Payload) != "x" {
 			t.Errorf("type %d: payload %q, want the byte after the header", tc.typ, u.Payload)
@@ -154,5 +154,21 @@ func TestItoaCoversWhatTheMessageNeeds(t *testing.T) {
 		if got := itoa(tc.n); got != tc.want {
 			t.Errorf("itoa(%d) = %q, want %q", tc.n, got, tc.want)
 		}
+	}
+}
+
+// TestTemporalIDIsThePlusOneMinusOne: the three bits on the wire are
+// nuh_temporal_id_plus1, so a base layer unit states 1 and has TemporalId 0, and a
+// unit stating 0 is refused (7.4.2.2). Reading the wire value as TemporalId plus one
+// made every unit of a real stream look like an enhancement layer one.
+func TestTemporalIDIsThePlusOneMinusOne(t *testing.T) {
+	for wire := byte(1); wire <= 7; wire++ {
+		units, err := SplitAnnexB([]byte{0, 0, 1, byte(UnitTrailR) << 1, wire, 'x'})
+		if err != nil || len(units) != 1 || units[0].TemporalID != wire-1 {
+			t.Errorf("wire value %d: %v %+v", wire, err, units)
+		}
+	}
+	if _, err := SplitAnnexB([]byte{0, 0, 1, byte(UnitTrailR) << 1, 0, 'x'}); !errors.Is(err, ErrTemporalIDPlus1) {
+		t.Errorf("nuh_temporal_id_plus1 of 0: %v", err)
 	}
 }
