@@ -124,8 +124,8 @@ func ParsePictureHash(payload []byte, chromaFormatIdc int) (h PictureHash, ok bo
 	return h, true, nil
 }
 
-// Plane is one colour component of a decoded picture: Width x Height samples,
-// Stride samples apart.
+// Plane is one colour component of a decoded picture: Width x Height samples, rows Stride
+// samples apart (Stride is at least Width; sample (x, y) is Pix[y*Stride+x]).
 type Plane struct {
 	Width, Height, Stride int
 	Pix                   []uint16

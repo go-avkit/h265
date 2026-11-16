@@ -309,7 +309,9 @@ func (d *DPB) Flush() {
 	d.pics = d.pics[:0]
 }
 
-// Crop returns the picture cut to the conformance window of sps (C.5.2.4).
+// Crop returns the picture cut to the conformance window of sps (C.5.2.4). It is a view:
+// each plane of the result is the window of the plane of p, the same memory with p's stride,
+// so nothing is copied. See Output for what that means for the caller.
 func (p *DecodedPicture) Crop(sps SPS) *DecodedPicture {
 	out := &DecodedPicture{Components: p.Components, BitDepth: p.BitDepth}
 	subW, subH := sps.chromaUnits()
@@ -322,11 +324,9 @@ func (p *DecodedPicture) Crop(sps SPS) *DecodedPicture {
 		} else {
 			x0, y0 = int(subW)*x0, int(subH)*y0
 		}
-		pix := make([]uint16, w*h)
-		for y := 0; y < h; y++ {
-			copy(pix[y*w:(y+1)*w], pl.Pix[(y0+y)*pl.Stride+x0:])
-		}
-		out.Planes[c] = Plane{Width: w, Height: h, Stride: w, Pix: pix}
+		first := y0*pl.Stride + x0
+		end := first + (h-1)*pl.Stride + w
+		out.Planes[c] = Plane{Width: w, Height: h, Stride: pl.Stride, Pix: pl.Pix[first:end:end]}
 	}
 	return out
 }
