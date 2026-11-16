@@ -223,7 +223,7 @@ func get(c *http.Client, url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 2*maxFile))
 }
 
-// pinStream hashes the bitstreams and trace files of an extracted stream.
+// pinStream hashes the bitstreams, trace files and md5 files of an extracted stream.
 func pinStream(dir, name string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join(dir, name))
 	if err != nil {
@@ -232,7 +232,7 @@ func pinStream(dir, name string) ([]string, error) {
 	var out []string
 	for _, e := range entries {
 		n := e.Name()
-		if !(strings.HasSuffix(n, ".bit") || strings.HasSuffix(n, ".bin") || strings.HasSuffix(n, ".trc") || strings.HasSuffix(n, "_trace.txt")) {
+		if !(strings.HasSuffix(n, ".bit") || strings.HasSuffix(n, ".bin") || strings.HasSuffix(n, ".trc") || strings.HasSuffix(n, "_trace.txt") || strings.HasSuffix(n, ".md5")) {
 			continue
 		}
 		h, err := hashFile(filepath.Join(dir, name, n))
