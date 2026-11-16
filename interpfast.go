@@ -67,7 +67,7 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 			}
 		}
 	case yFrac == 0:
-		if n == 8 && kernelH(sc, src, ss, w, h, bitDepth, taps[xFrac]) {
+		if kernelH(sc, src, ss, w, h, bitDepth, taps[xFrac]) {
 			for i, v := range sc.mid[:h*w] {
 				out[i] = int32(v)
 			}
@@ -78,7 +78,7 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 		vpass(src, ss, w, h, taps[yFrac], shift1, out)
 	default:
 		mid := sc.mid[:hh*w]
-		if n == 8 && kernelHV(sc, src, ss, w, h, bitDepth, taps[xFrac], taps[yFrac], out) {
+		if kernelHV(sc, src, ss, w, h, bitDepth, taps[xFrac], taps[yFrac], out) {
 			return
 		}
 		hpass(src, ss, hh, w, taps[xFrac], shift1, mid)
@@ -94,10 +94,23 @@ func coefficients(taps []int32) (c [8]int16) {
 	return
 }
 
+// coefficients4 is a chroma filter as the kernels take it.
+func coefficients4(taps []int32) (c [4]int16) {
+	for i, t := range taps {
+		c[i] = int16(t)
+	}
+	return
+}
+
 // kernelHV runs both passes of the kernels package for a block of h rows: the
 // horizontal one over h + 7 rows into sc.mid, then the vertical one into out; false when
 // the kernels refuse either, which then run in Go.
 func kernelHV(sc *interpScratch, src []uint16, ss, w, h, bitDepth int, tx, ty []int32, out []int32) bool {
+	if len(tx) == 4 { // chroma: four taps, one row before and two after
+		cx, cy := coefficients4(tx), coefficients4(ty)
+		return hevc.TryHPass4(sc.mid[:(h+3)*w], 0, w, src, 1, ss, w, h+3, bitDepth, &cx) == nil &&
+			hevc.TryVPass4(out, 0, w, sc.mid[:(h+3)*w], w, w, w, h, &cy) == nil
+	}
 	cx, cy := coefficients(tx), coefficients(ty)
 	return hevc.TryHPass8(sc.mid[:(h+7)*w], 0, w, src, 3, ss, w, h+7, bitDepth, &cx) == nil &&
 		hevc.TryVPass8(out, 0, w, sc.mid[:(h+7)*w], 3*w, w, w, h, &cy) == nil
@@ -106,6 +119,10 @@ func kernelHV(sc *interpScratch, src []uint16, ss, w, h, bitDepth int, tx, ty []
 // kernelH runs the horizontal pass of the kernels package over rows rows into sc.mid
 // (int16, w per row); false when the kernels refuse the call, which then runs in Go.
 func kernelH(sc *interpScratch, src []uint16, ss, w, rows, bitDepth int, taps []int32) bool {
+	if len(taps) == 4 {
+		c := coefficients4(taps)
+		return hevc.TryHPass4(sc.mid[:rows*w], 0, w, src, 1, ss, w, rows, bitDepth, &c) == nil
+	}
 	c := coefficients(taps)
 	return hevc.TryHPass8(sc.mid[:rows*w], 0, w, src, 3, ss, w, rows, bitDepth, &c) == nil
 }
