@@ -50,6 +50,8 @@ type Reconstructor struct {
 	// prediction reads, the same value as PictureState.Inter.
 	Inter *InterSlice
 	err   error
+	// sc is the working memory of the inter prediction of a block.
+	sc interpScratch
 }
 
 // Err is the first error the prediction of an inter coding unit met. Such a unit is
