@@ -52,6 +52,12 @@ decoder. Speed is not measured yet. CI pins these counts. **Not verified yet:** 
 - SEI parsing and the decoded picture hash (MD5, CRC, checksum).
 
 `decode` does not use it: it still wraps a third-party decoder for HEVC.
+
+**Security fix in v0.16.0:** on a hostile SPS (a picture width or height that is
+not a multiple of the minimum coding block size) v0.14.0 and v0.15.0 could panic
+in intra reconstruction, found by `FuzzDecoder`; `ParseSPS` now refuses such a
+size, as 7.4.3.2.1 requires. Upgrade if you call them on untrusted input.
+
 **Behaviour change in v0.14.0:** `Unit.TemporalID` is now TemporalId (0 for the
 base layer, as 7.4.2.2 defines it); every version up to v0.13.2 returned
 TemporalId + 2. A unit stating `nuh_temporal_id_plus1 = 0` is refused with
