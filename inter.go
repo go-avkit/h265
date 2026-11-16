@@ -179,6 +179,9 @@ type fullPel struct {
 // positions, (A0 + A1 + 1) >> 1: (8-264) with the intermediates A << shift3 of 8.5.3.3.3.2,
 // where shift2 is shift3 + 1.
 func average(dst *Plane, x0, y0, w, h int, a, b fullPel) {
+	if !kernelRefused("Average", hevc.TryAverage(dst.Pix, y0*dst.Stride+x0, dst.Stride, a.ref.Pix, a.yi*a.ref.Stride+a.xi, a.ref.Stride, b.ref.Pix, b.yi*b.ref.Stride+b.xi, b.ref.Stride, w, h)) {
+		return
+	}
 	for y := 0; y < h; y++ {
 		ra := a.ref.Pix[(a.yi+y)*a.ref.Stride+a.xi : (a.yi+y)*a.ref.Stride+a.xi+w]
 		rb := b.ref.Pix[(b.yi+y)*b.ref.Stride+b.xi : (b.yi+y)*b.ref.Stride+b.xi+w]
