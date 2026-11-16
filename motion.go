@@ -396,9 +396,15 @@ func (w *SliceWalker) deriveMotion(sl *InterSlice, cu *CodingUnit, pu *Predictio
 		}
 	}
 	pu.Motion = m
-	for y := pu.Y >> 2; y < (pu.Y+pu.H)>>2; y++ {
-		for x := pu.X >> 2; x < (pu.X+pu.W)>>2; x++ {
-			w.Pic.Motion[y*w.Pic.Edge4W+x] = m
+	// the 4 x 4 blocks of the unit: the first row one by one, the others copied from it
+	y0, y1, x0, x1 := pu.Y>>2, (pu.Y+pu.H)>>2, pu.X>>2, (pu.X+pu.W)>>2
+	if y0 < y1 && x0 < x1 {
+		first := w.Pic.Motion[y0*w.Pic.Edge4W+x0 : y0*w.Pic.Edge4W+x1]
+		for i := range first {
+			first[i] = m
+		}
+		for y := y0 + 1; y < y1; y++ {
+			copy(w.Pic.Motion[y*w.Pic.Edge4W+x0:y*w.Pic.Edge4W+x1], first)
 		}
 	}
 }

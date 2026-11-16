@@ -3,7 +3,11 @@
 
 package h265
 
-import "github.com/go-videodsp/kernels/hevc"
+import (
+	"sync"
+
+	"github.com/go-videodsp/kernels/hevc"
+)
 
 // The sample adaptive offset process (8.7.3). It runs on the deblocked picture, one
 // coding tree block at a time, reading the deblocked samples and writing the picture.
@@ -14,6 +18,9 @@ var (
 	saoVPos = [4][2]int{{0, 0}, {-1, 1}, {-1, 1}, {-1, 1}}
 )
 
+// saoScratch holds the buffers of the copy SAO reads its neighbours from.
+var saoScratch = sync.Pool{New: func() any { return new([]uint16) }}
+
 // SAO applies sample adaptive offset to the deblocked picture frame (8.7.3.1) with
 // the parameters the walk read for each coding tree block.
 func (ps *PictureState) SAO(frame *DecodedPicture, sps SPS, pps PPS) {
@@ -22,7 +29,11 @@ func (ps *PictureState) SAO(frame *DecodedPicture, sps SPS, pps PPS) {
 	for _, nf := range ps.NoFilter {
 		anyNoFilter = anyNoFilter || nf
 	}
-	var src []uint16
+	// the copy of the deblocked plane is scratch: a decoder runs one picture after another,
+	// so the buffer is kept between them instead of allocated and cleared for each
+	bp := saoScratch.Get().(*[]uint16)
+	src := *bp
+	defer func() { *bp = src; saoScratch.Put(bp) }()
 	for c := 0; c < frame.Components; c++ {
 		used := false
 		for i := range ps.Sao {

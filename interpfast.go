@@ -61,15 +61,17 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 	switch {
 	case xFrac == 0 && yFrac == 0:
 		for y := 0; y < h; y++ {
-			row, o := src[y*ss:y*ss+w], out[y*w:y*w+w]
+			o := out[y*w : y*w+w]
+			row := src[y*ss : y*ss+w][:len(o)]
 			for x := range o {
 				o[x] = int32(row[x]) << shift3
 			}
 		}
 	case yFrac == 0:
 		if kernelH(sc, src, ss, w, h, bitDepth, taps[xFrac]) {
-			for i, v := range sc.mid[:h*w] {
-				out[i] = int32(v)
+			o := out[:h*w]
+			for i, v := range sc.mid[:len(o)] {
+				o[i] = int32(v)
 			}
 			return
 		}
