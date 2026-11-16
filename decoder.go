@@ -66,6 +66,10 @@ type Output struct {
 	POC     int32
 	// Tag is the Tag of the first slice segment of the picture (Unit.Tag).
 	Tag uint64
+	// Corrupt says the picture could not be decoded to its end: a slice was lost or failed, or
+	// it is predicted from a reference the stream never delivered (an error came back with it
+	// and Stats.Failed counts it). The picture is still output, as far as it was decoded.
+	Corrupt bool
 }
 
 // DecoderStats counts what a decoder has done.
@@ -126,7 +130,7 @@ func NewDecoder(opt Options) *Decoder {
 	}
 	d := &Decoder{opt: opt, spsM: map[uint32]SPS{}, ppsM: map[uint32]PPS{}, layouts: map[[2]int]*CtbLayout{}}
 	d.dpb.Output = func(p *DPBPicture) {
-		d.out = append(d.out, Output{Picture: p.Frame.Crop(p.SPS), POC: p.POC, Tag: p.Tag})
+		d.out = append(d.out, Output{Picture: p.Frame.Crop(p.SPS), POC: p.POC, Tag: p.Tag, Corrupt: p.Corrupt})
 	}
 	return d
 }
@@ -213,7 +217,7 @@ func (d *Decoder) finish() {
 			}
 		}
 	}
-	d.dpb.Finish(&DPBPicture{POC: c.poc, Frame: c.frame, State: c.state, SPS: c.sps, TemporalID: c.tid, Tag: c.tag}, c.output)
+	d.dpb.Finish(&DPBPicture{POC: c.poc, Frame: c.frame, State: c.state, SPS: c.sps, TemporalID: c.tid, Tag: c.tag, Corrupt: c.failed}, c.output)
 }
 
 func (d *Decoder) decode(u Unit) {
