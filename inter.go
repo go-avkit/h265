@@ -107,24 +107,36 @@ type explicitWeights struct {
 func weighted(pl *Plane, x0, y0, w, h int, p [2][]int32, predFlag [2]bool, bitDepth int, ew *explicitWeights) {
 	maxVal := int32(1)<<uint(bitDepth) - 1
 	shift1 := uint(max(2, 14-bitDepth))
+	bi := predFlag[0] && predFlag[1]
+	l := bit(predFlag[1]) // the list of a uni-predicted block
 	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			i := y*w + x
-			var v int32
-			switch {
-			case ew == nil && predFlag[0] && predFlag[1]:
-				shift2 := shift1 + 1
-				v = (p[0][i] + p[1][i] + 1<<(shift2-1)) >> shift2 // (8-264)
-			case ew == nil:
-				l := bit(predFlag[1])
-				v = (p[l][i] + 1<<(shift1-1)) >> shift1 // (8-262), (8-263)
-			case predFlag[0] && predFlag[1]:
-				v = (p[0][i]*ew.w[0] + p[1][i]*ew.w[1] + (ew.o[0]+ew.o[1]+1)<<uint(ew.log2Wd)) >> uint(ew.log2Wd+1) // (8-277)
-			default:
-				l := bit(predFlag[1])
-				v = ((p[l][i]*ew.w[l] + 1<<uint(ew.log2Wd-1)) >> uint(ew.log2Wd)) + ew.o[l] // (8-275), (8-276)
+		o := pl.Pix[(y0+y)*pl.Stride+x0 : (y0+y)*pl.Stride+x0+w]
+		var a, b []int32
+		if bi {
+			a, b = p[0][y*w:y*w+w], p[1][y*w:y*w+w]
+		} else {
+			a = p[l][y*w : y*w+w]
+		}
+		switch {
+		case ew == nil && bi:
+			shift2 := shift1 + 1
+			for x := range o {
+				o[x] = uint16(min(max((a[x]+b[x]+1<<(shift2-1))>>shift2, 0), maxVal)) // (8-264)
 			}
-			pl.Pix[(y0+y)*pl.Stride+x0+x] = uint16(min(max(v, 0), maxVal))
+		case ew == nil:
+			for x := range o {
+				o[x] = uint16(min(max((a[x]+1<<(shift1-1))>>shift1, 0), maxVal)) // (8-262), (8-263)
+			}
+		case bi:
+			w0, w1, off, sh := ew.w[0], ew.w[1], (ew.o[0]+ew.o[1]+1)<<uint(ew.log2Wd), uint(ew.log2Wd+1)
+			for x := range o {
+				o[x] = uint16(min(max((a[x]*w0+b[x]*w1+off)>>sh, 0), maxVal)) // (8-277)
+			}
+		default:
+			wl, ol, rnd, sh := ew.w[l], ew.o[l], int32(1)<<uint(ew.log2Wd-1), uint(ew.log2Wd)
+			for x := range o {
+				o[x] = uint16(min(max(((a[x]*wl+rnd)>>sh)+ol, 0), maxVal)) // (8-275), (8-276)
+			}
 		}
 	}
 }
@@ -191,13 +203,17 @@ func (r *Reconstructor) predictInter(cu *CodingUnit) error {
 				if ref.Width != dst.Width || ref.Height != dst.Height {
 					return fmt.Errorf("h265: a reference picture of %dx%d for a picture of %dx%d", ref.Width, ref.Height, dst.Width, dst.Height)
 				}
-				pred[l] = make([]int32, w*h)
+				pred[l] = r.sc.pred[l][:w*h]
 				mv := pu.Motion.MV[l]
-				if c == 0 {
-					interpolate(ref, pu.X+int(mv[0])>>2, pu.Y+int(mv[1])>>2, int(mv[0])&3, int(mv[1])&3, w, h, bitDepth, 3, lumaTaps[:], pred[l])
-				} else {
+				xi, yi, xf, yf, before, taps := pu.X+int(mv[0])>>2, pu.Y+int(mv[1])>>2, int(mv[0])&3, int(mv[1])&3, 3, lumaTaps[:]
+				if c > 0 {
 					mvx, mvy := int(mv[0])*2/subW, int(mv[1])*2/subH // (8-210), (8-211)
-					interpolate(ref, x0+mvx>>3, y0+mvy>>3, mvx&7, mvy&7, w, h, bitDepth, 1, chromaTaps[:], pred[l])
+					xi, yi, xf, yf, before, taps = x0+mvx>>3, y0+mvy>>3, mvx&7, mvy&7, 1, chromaTaps[:]
+				}
+				if bitDepth <= 12 { // the ranges of interpfast.go hold
+					interpolateFast(&r.sc, ref, xi, yi, xf, yf, w, h, bitDepth, before, taps, pred[l])
+				} else {
+					interpolate(ref, xi, yi, xf, yf, w, h, bitDepth, before, taps, pred[l])
 				}
 			}
 			var ew *explicitWeights

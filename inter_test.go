@@ -508,3 +508,50 @@ func TestInterPredictionRefusals(t *testing.T) {
 		t.Error("the first error was replaced")
 	}
 }
+
+// The no-call-per-sample interpolation against the reference one: every block size up to
+// 64 x 64, windows inside the plane and across its edges, samples at the extremes of the
+// range (so the first-stage sums reach the int16 bounds stated in interpfast.go).
+func TestFastInterpolationAgainstTheReference(t *testing.T) {
+	rng := rand.New(rand.NewPCG(409, 410))
+	var sc interpScratch
+	var inside, across int
+	for iter := 0; iter < 4000; iter++ {
+		bd := 8 + rng.IntN(5)
+		pl := randomPlane(rng, 20+rng.IntN(120), 20+rng.IntN(120), bd)
+		if rng.IntN(2) == 0 { // the extremes only
+			for i := range pl.Pix {
+				pl.Pix[i] = uint16(rng.IntN(2)) * uint16(1<<uint(bd)-1)
+			}
+		}
+		w, h := 1+rng.IntN(64), 1+rng.IntN(64)
+		xInt, yInt := rng.IntN(pl.Width+40)-20, rng.IntN(pl.Height+40)-20
+		taps, before, fracs := lumaTaps[:], 3, 4
+		if rng.IntN(2) == 0 {
+			taps, before, fracs = chromaTaps[:], 1, 8
+		}
+		xFrac, yFrac := rng.IntN(fracs), rng.IntN(fracs)
+		if rng.IntN(4) == 0 {
+			xFrac = 0
+		}
+		if rng.IntN(4) == 0 {
+			yFrac = 0
+		}
+		want, got := make([]int32, w*h), make([]int32, w*h)
+		interpolate(pl, xInt, yInt, xFrac, yFrac, w, h, bd, before, taps, want)
+		interpolateFast(&sc, pl, xInt, yInt, xFrac, yFrac, w, h, bd, before, taps, got)
+		if xInt-before >= 0 && yInt-before >= 0 && xInt+w+8 <= pl.Width && yInt+h+8 <= pl.Height {
+			inside++
+		} else {
+			across++
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("iter %d: %dx%d bit depth %d frac (%d,%d) at (%d,%d): sample %d is %d, the reference gives %d", iter, w, h, bd, xFrac, yFrac, xInt, yInt, i, got[i], want[i])
+			}
+		}
+	}
+	if inside == 0 || across == 0 {
+		t.Errorf("windows inside %d, across the edge %d", inside, across)
+	}
+}
