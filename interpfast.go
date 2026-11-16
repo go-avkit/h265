@@ -3,6 +3,8 @@
 
 package h265
 
+import "github.com/go-videodsp/kernels/hevc"
+
 // The fractional sample interpolation of 8.5.3.3.3 without a function call per sample.
 // interpolate (inter.go) stays the reference this is tested against, and the path for
 // bit depths above 12.
@@ -65,14 +67,47 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 			}
 		}
 	case yFrac == 0:
+		if n == 8 && kernelH(sc, src, ss, w, h, bitDepth, taps[xFrac]) {
+			for i, v := range sc.mid[:h*w] {
+				out[i] = int32(v)
+			}
+			return
+		}
 		hpass(src, ss, h, w, taps[xFrac], shift1, out)
 	case xFrac == 0:
 		vpass(src, ss, w, h, taps[yFrac], shift1, out)
 	default:
 		mid := sc.mid[:hh*w]
+		if n == 8 && kernelHV(sc, src, ss, w, h, bitDepth, taps[xFrac], taps[yFrac], out) {
+			return
+		}
 		hpass(src, ss, hh, w, taps[xFrac], shift1, mid)
 		vpass(mid, w, w, h, taps[yFrac], 6, out)
 	}
+}
+
+// coefficients is a luma filter as the kernels take it.
+func coefficients(taps []int32) (c [8]int16) {
+	for i, t := range taps {
+		c[i] = int16(t)
+	}
+	return
+}
+
+// kernelHV runs both passes of the kernels package for a block of h rows: the
+// horizontal one over h + 7 rows into sc.mid, then the vertical one into out; false when
+// the kernels refuse either, which then run in Go.
+func kernelHV(sc *interpScratch, src []uint16, ss, w, h, bitDepth int, tx, ty []int32, out []int32) bool {
+	cx, cy := coefficients(tx), coefficients(ty)
+	return hevc.TryHPass8(sc.mid[:(h+7)*w], 0, w, src, 3, ss, w, h+7, bitDepth, &cx) == nil &&
+		hevc.TryVPass8(out, 0, w, sc.mid[:(h+7)*w], 3*w, w, w, h, &cy) == nil
+}
+
+// kernelH runs the horizontal pass of the kernels package over rows rows into sc.mid
+// (int16, w per row); false when the kernels refuse the call, which then runs in Go.
+func kernelH(sc *interpScratch, src []uint16, ss, w, rows, bitDepth int, taps []int32) bool {
+	c := coefficients(taps)
+	return hevc.TryHPass8(sc.mid[:rows*w], 0, w, src, 3, ss, w, rows, bitDepth, &c) == nil
 }
 
 // hpass is the horizontal filter over rows rows of w samples: dst[y*w+x] is the sum of
