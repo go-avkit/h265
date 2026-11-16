@@ -141,6 +141,27 @@ func weighted(pl *Plane, x0, y0, w, h int, p [2][]int32, predFlag [2]bool, bitDe
 	}
 }
 
+// fullPel is a block of a reference plane at a full-sample position inside the plane.
+type fullPel struct {
+	ref    *Plane
+	xi, yi int
+	ok     bool
+}
+
+// average writes the default weighted prediction of a block from two lists at full-sample
+// positions, (A0 + A1 + 1) >> 1: (8-264) with the intermediates A << shift3 of 8.5.3.3.3.2,
+// where shift2 is shift3 + 1.
+func average(dst *Plane, x0, y0, w, h int, a, b fullPel) {
+	for y := 0; y < h; y++ {
+		ra := a.ref.Pix[(a.yi+y)*a.ref.Stride+a.xi : (a.yi+y)*a.ref.Stride+a.xi+w]
+		rb := b.ref.Pix[(b.yi+y)*b.ref.Stride+b.xi : (b.yi+y)*b.ref.Stride+b.xi+w]
+		o := dst.Pix[(y0+y)*dst.Stride+x0 : (y0+y)*dst.Stride+x0+w]
+		for x := range o {
+			o[x] = uint16((uint32(ra[x]) + uint32(rb[x]) + 1) >> 1)
+		}
+	}
+}
+
 // explicitFor is what 8.5.3.3.4.3 derives for component c from the weights the slice
 // states: log2Wd, w0, w1, o0 and o1 for the reference indices of m (8-265 to 8-274).
 func explicitFor(pw *PredWeights, sps SPS, m *Motion, c int) *explicitWeights {
@@ -191,6 +212,8 @@ func (r *Reconstructor) predictInter(cu *CodingUnit) error {
 			}
 			x0, y0, w, h := pu.X/subW, pu.Y/subH, pu.W/subW, pu.H/subH
 			var pred [2][]int32
+			copied := false
+			var fp [2]fullPel
 			for l := 0; l < 2; l++ {
 				if !pu.Motion.Pred[l] {
 					continue
@@ -210,10 +233,48 @@ func (r *Reconstructor) predictInter(cu *CodingUnit) error {
 					mvx, mvy := int(mv[0])*2/subW, int(mv[1])*2/subH // (8-210), (8-211)
 					xi, yi, xf, yf, before, taps = x0+mvx>>3, y0+mvy>>3, mvx&7, mvy&7, 1, chromaTaps[:]
 				}
+				// A block predicted from one list at a full-sample position, with the default
+				// weighting, is a copy: (A << shift3 + (1 << (shift1 - 1))) >> shift1 is A
+				// (8-262) as shift1 and shift3 are the same number, Max( 2, 14 - bitDepth ).
+				if pu.Motion.Pred[0] != pu.Motion.Pred[1] && sl.Weights == nil && xf == 0 && yf == 0 &&
+					xi >= 0 && yi >= 0 && xi+w <= ref.Width && yi+h <= ref.Height {
+					for y := 0; y < h; y++ {
+						copy(dst.Pix[(y0+y)*dst.Stride+x0:(y0+y)*dst.Stride+x0+w], ref.Pix[(yi+y)*ref.Stride+xi:(yi+y)*ref.Stride+xi+w])
+					}
+					copied = true
+					continue
+				}
+				// From both lists the block is the average (A0 + A1 + 1) >> 1 (8-264), made after
+				// the loop when both lists are at full-sample positions.
+				if pu.Motion.Pred[0] && pu.Motion.Pred[1] && sl.Weights == nil && xf == 0 && yf == 0 &&
+					xi >= 0 && yi >= 0 && xi+w <= ref.Width && yi+h <= ref.Height {
+					fp[l] = fullPel{ref, xi, yi, true}
+					continue
+				}
 				if bitDepth <= 12 { // the ranges of interpfast.go hold
 					interpolateFast(&r.sc, ref, xi, yi, xf, yf, w, h, bitDepth, before, taps, pred[l])
 				} else {
 					interpolate(ref, xi, yi, xf, yf, w, h, bitDepth, before, taps, pred[l])
+				}
+			}
+			if copied {
+				continue
+			}
+			if fp[0].ok && fp[1].ok {
+				average(dst, x0, y0, w, h, fp[0], fp[1])
+				continue
+			}
+			for l := range fp { // one list at a full-sample position, the other not: interpolate it as usual
+				if fp[l].ok {
+					taps, before := lumaTaps[:], 3
+					if c > 0 {
+						taps, before = chromaTaps[:], 1
+					}
+					if bitDepth <= 12 {
+						interpolateFast(&r.sc, fp[l].ref, fp[l].xi, fp[l].yi, 0, 0, w, h, bitDepth, before, taps, pred[l])
+					} else {
+						interpolate(fp[l].ref, fp[l].xi, fp[l].yi, 0, 0, w, h, bitDepth, before, taps, pred[l])
+					}
 				}
 			}
 			var ew *explicitWeights

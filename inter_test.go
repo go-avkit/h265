@@ -214,7 +214,7 @@ func TestInterPredictionOfACodingUnit(t *testing.T) {
 	for iter := 0; iter < 1500; iter++ {
 		chromaFormat := rng.IntN(4)
 		sps := SPS{ChromaFormat: uint8(chromaFormat), CodedWidth: 64, CodedHeight: 48,
-			BitDepthLuma: uint8(8 + rng.IntN(5)), BitDepthChroma: uint8(8 + rng.IntN(5))}
+			BitDepthLuma: uint8(8 + rng.IntN(9)), BitDepthChroma: uint8(8 + rng.IntN(9))}
 		sps.Range.HighPrecisionOffsets = rng.IntN(2) == 0
 		frame := NewDecodedPicture(sps)
 		sl := &InterSlice{Type: SliceB}
