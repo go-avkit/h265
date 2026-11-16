@@ -246,9 +246,9 @@ func (r *Reconstructor) reconstruct(w *SliceWalker, cu *CodingUnit, c, x, y, log
 	}
 	maxVal := int32(1)<<uint(bitDepth) - 1
 	for j := 0; j < n; j++ {
-		for i := 0; i < n; i++ {
-			p := &pl.Pix[(y+j)*pl.Stride+x+i]
-			*p = uint16(min(max(int32(*p)+res[j*n+i], 0), maxVal))
+		row, rr := pl.Pix[(y+j)*pl.Stride+x:(y+j)*pl.Stride+x+n], res[j*n:j*n+n]
+		for i := range row {
+			row[i] = uint16(min(max(int32(row[i])+rr[i], 0), maxVal))
 		}
 	}
 }
