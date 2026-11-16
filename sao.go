@@ -116,6 +116,21 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 			}
 		}
 	}
+	// A block whose eight neighbouring blocks all exist and may be used (same slice or one
+	// that lets the filter across, same tile or one that lets it across) has both neighbours
+	// of every one of its samples usable, in the deblocked picture src, so the whole block
+	// goes to the kernels at once. Nothing in it must stay as it is (no pcm or bypass sample
+	// anywhere in the picture), and the block is whole (a block with a neighbour on every
+	// side is). Any other block takes the path below.
+	if off, ok := saoOffsets(&p.Offset[c]); ok && !anyNoFilter && saoAllUsable(&usable) {
+		if saoWholeBlockHook != nil {
+			saoWholeBlockHook()
+		}
+		i := y0*pl.Stride + x0
+		if !kernelRefused("SAOEdge", hevc.TrySAOEdge(pl.Pix, i, pl.Stride, src, i, pl.Stride, cw, ch, bitDepth, int(class), &off)) {
+			return
+		}
+	}
 	// The interior of the block, where both neighbours lie inside it, goes to the kernels
 	// (bit depth up to 12, no sample that must stay as it is); the border below stays in Go.
 	kernelDone := false
@@ -194,6 +209,23 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 		}
 	}
 }
+
+// saoAllUsable reports whether all nine blocks of the 3 x 3 around a coding tree block exist
+// and may be used for its edge offset (a block outside the picture is never marked usable).
+func saoAllUsable(u *[3][3]bool) bool {
+	for _, row := range u {
+		for _, ok := range row {
+			if !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// saoWholeBlockHook, when set (by tests), is called each time a block takes the path of the
+// whole-block kernel call.
+var saoWholeBlockHook func()
 
 func sign(v int) int {
 	switch {
