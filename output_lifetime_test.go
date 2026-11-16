@@ -94,3 +94,32 @@ func TestCropIsAViewOfThePicture(t *testing.T) {
 		}
 	}
 }
+
+// TestCloneIsAnOwnedWritableCopy: the copy equals the picture, is contiguous, and writing to it
+// leaves the decoder's picture (and so the later pictures predicted from it) untouched.
+func TestCloneIsAnOwnedWritableCopy(t *testing.T) {
+	sps := mustSPS(t, set{chroma: 1, width: 32, height: 16, window: [4]uint32{1, 2, 1, 0}})
+	f := NewDecodedPicture(sps)
+	for c := 0; c < 3; c++ {
+		for i := range f.Planes[c].Pix {
+			f.Planes[c].Pix[i] = uint16(i % 251)
+		}
+	}
+	view := f.Crop(sps)
+	want := pictureMD5(view)
+	cl := view.Clone()
+	if got := pictureMD5(cl); got != want {
+		t.Fatalf("the clone hashes %s, the view %s", got, want)
+	}
+	for c := 0; c < cl.Components; c++ {
+		if pl := cl.Planes[c]; pl.Stride != pl.Width || len(pl.Pix) != pl.Width*pl.Height {
+			t.Errorf("plane %d is not contiguous: stride %d width %d length %d", c, pl.Stride, pl.Width, len(pl.Pix))
+		}
+		for i := range cl.Planes[c].Pix {
+			cl.Planes[c].Pix[i] ^= 0xffff
+		}
+	}
+	if got := pictureMD5(view); got != want {
+		t.Errorf("writing to the clone changed the picture: %s, was %s", got, want)
+	}
+}

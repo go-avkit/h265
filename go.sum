@@ -1,4 +1,4 @@
 github.com/go-avkit/bitstream v0.4.0 h1:cpPNgKWeAjEpTzjORXPH4Advu2BdtCBHloQXSwgl+pk=
 github.com/go-avkit/bitstream v0.4.0/go.mod h1:aA50I8nXKyJu6ElfTHM957BRrx5JjgSYUxs++n5VM8o=
-github.com/go-videodsp/kernels v0.15.0 h1:IntBSMEYWhC7lRJUVspfWAGxz8nKyVL8QnOXffu8PSw=
-github.com/go-videodsp/kernels v0.15.0/go.mod h1:+nQCn5NvYhjT8DtUqSplgir5dB4D66rqiGd8R3fimBE=
+github.com/go-videodsp/kernels v0.16.0 h1:DMKAw9wsQvZ14urcJeyVUgWJUbRHraS3n9M8fPghmu0=
+github.com/go-videodsp/kernels v0.16.0/go.mod h1:+nQCn5NvYhjT8DtUqSplgir5dB4D66rqiGd8R3fimBE=
