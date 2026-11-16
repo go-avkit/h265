@@ -57,6 +57,9 @@ type PredictionUnit struct {
 	// mvp_l1_flag.
 	Mvd     [2][2]int32
 	MvpFlag [2]uint8
+	// Motion is the motion derived from the above (8.5.3.2) when the slice's reference
+	// picture lists are known to the walker (PictureState.Inter).
+	Motion Motion
 }
 
 // CodingUnit is coding_unit( ) (7.3.8.5) as it was read: the syntax elements, not
@@ -141,6 +144,9 @@ func (w *SliceWalker) codingUnit(x0, y0, log2CbSize int, tree TransformTreeFunc,
 		// prediction_unit( ) of a skipped coding unit states only merge_idx.
 		cu.PU[0] = PredictionUnit{X: x0, Y: y0, W: nCbS, H: nCbS, Merge: true}
 		w.mergeIndex(&cu.PU[0])
+		if sl := w.Pic.Inter; sl != nil {
+			w.deriveMotion(sl, cu, &cu.PU[0], 0)
+		}
 		w.markTBTree(cu, x0, y0, log2CbSize, 0)
 		if report != nil {
 			report(cu)
@@ -375,6 +381,9 @@ func (w *SliceWalker) interUnits(cu *CodingUnit, x0, y0, n int) error {
 	for i, b := range bs {
 		if err := w.predictionUnit(cu, &cu.PU[i], x0+b.x, y0+b.y, b.w, b.h); err != nil {
 			return err
+		}
+		if sl := w.Pic.Inter; sl != nil {
+			w.deriveMotion(sl, cu, &cu.PU[i], i)
 		}
 	}
 	return nil

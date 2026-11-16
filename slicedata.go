@@ -63,6 +63,9 @@ type PictureState struct {
 	// DbAcross is slice_loop_filter_across_slices_enabled_flag per CTB.
 	DbAcross []bool
 	Motion   []Motion
+	// Inter is the reference picture lists and variables of the slice being decoded; nil
+	// when the motion of prediction units is not derived.
+	Inter *InterSlice
 	// QpY is QpY of each coding unit on the grid of CtDepth; lastQpY is the QpY of
 	// the last coding unit decoded, which a dependent slice segment continues from.
 	QpY     []int8
@@ -159,6 +162,9 @@ func (w *SliceWalker) Available(xCurr, yCurr, xN, yN int) bool {
 func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu CodingUnitFunc) error {
 	sps, l := ps.SPS, ps.Layout
 	w := &SliceWalker{Pic: ps, SPS: sps, PPS: pps, Hdr: hdr, cu: cu, chroma: int(chromaArrayType(sps))}
+	if ps.Inter != nil && ps.Motion == nil {
+		ps.Motion = make([]Motion, len(ps.EdgeV))
+	}
 	unesc := u.Unescape()
 	if hdr.DataOffset < 0 || hdr.DataOffset > len(unesc) {
 		return fmt.Errorf("%w: slice data starts at %d of %d bytes", ErrSliceData, hdr.DataOffset, len(unesc))

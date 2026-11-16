@@ -19,8 +19,13 @@ const (
 // quarter luma samples.
 type Motion struct {
 	Pred [2]bool
-	Ref  [2]int32
-	MV   [2][2]int16
+	// Ref is the order count of the reference picture of each list used, which names
+	// the picture; RefIdx its index in the slice's list and LongTerm whether it was a
+	// long-term reference picture, which motion derivation reads (-1 for a list not used).
+	Ref      [2]int32
+	MV       [2][2]int16
+	RefIdx   [2]int8
+	LongTerm [2]bool
 }
 
 // initDeblocking allocates the maps the filter needs.
