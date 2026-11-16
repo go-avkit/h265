@@ -30,8 +30,8 @@ github.com/go-simd/floats v0.24.0 h1:17G1R1kyHRaRpSvod1/VfoogVn3F6h9FviTpb0alnog
 github.com/go-simd/floats v0.24.0/go.mod h1:Aq5a6oY5pUqm9Hpi+iV2nrNmaaUb0rwHvUHIerXWSvA=
 github.com/go-test/deep v1.1.0 h1:WOcxcdHcvdgThNXjw0t76K42FXTU7HpNQWHpA2HHNlg=
 github.com/go-test/deep v1.1.0/go.mod h1:5C2ZWiW0ErCdrYzpqxLbTX7MG14M9iiw8DgHncVwcsE=
-github.com/go-videodsp/kernels v0.13.0 h1:oC1vs+ttBLXCiJkvM6Gjv7s4kR1TmXa7QnBkNhXIq14=
-github.com/go-videodsp/kernels v0.13.0/go.mod h1:+nQCn5NvYhjT8DtUqSplgir5dB4D66rqiGd8R3fimBE=
+github.com/go-videodsp/kernels v0.14.0 h1:aNOlVR1Wr0utGeBygBRHM5XzHFNlUFLKM660yJrwH40=
+github.com/go-videodsp/kernels v0.14.0/go.mod h1:+nQCn5NvYhjT8DtUqSplgir5dB4D66rqiGd8R3fimBE=
 github.com/icza/bitio v1.1.0 h1:ysX4vtldjdi3Ygai5m1cWy4oLkhWTAi+SyO6HC8L9T0=
 github.com/icza/bitio v1.1.0/go.mod h1:0jGnlLAx8MKMr9VGnn/4YrvZiprkvBelsVIbA9Jjr9A=
 github.com/icza/mighty v0.0.0-20180919140131-cfd07d671de6 h1:8UsGZ2rr2ksmEru6lToqnXgA8Mz1DP11X4zSJ159C3k=

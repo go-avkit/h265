@@ -128,3 +128,30 @@ func TestAHorizontalPassOver71RowsRunsInBands(t *testing.T) {
 		}
 	}
 }
+
+// TestAverageFallsBackToTheGoLoopWhenTheKernelRefuses: a width of 3 is one the kernel does not
+// take, so the loop computes it, and the refusal is counted under Average.
+func TestAverageFallsBackToTheGoLoopWhenTheKernelRefuses(t *testing.T) {
+	mk := func(seed uint16) *Plane {
+		pl := &Plane{Width: 8, Height: 4, Stride: 8, Pix: make([]uint16, 32)}
+		for i := range pl.Pix {
+			pl.Pix[i] = seed + uint16(i)*3001
+		}
+		return pl
+	}
+	ra, rb, dst := mk(1), mk(40000), mk(0)
+	refusals := countRefusals(t, func() {
+		average(dst, 1, 1, 3, 2, fullPel{ref: ra, xi: 2, yi: 1}, fullPel{ref: rb, xi: 4, yi: 2})
+	})
+	if refusals["Average"] != 1 {
+		t.Errorf("refusals %v", refusals)
+	}
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 3; x++ {
+			want := uint16((uint32(ra.Pix[(1+y)*8+2+x]) + uint32(rb.Pix[(2+y)*8+4+x]) + 1) >> 1)
+			if got := dst.Pix[(1+y)*8+1+x]; got != want {
+				t.Errorf("(%d,%d): %d, want %d", x, y, got, want)
+			}
+		}
+	}
+}
