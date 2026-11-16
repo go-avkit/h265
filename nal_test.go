@@ -103,6 +103,46 @@ func TestTheFramingIsBitstreamsAndItsRefusalsTravel(t *testing.T) {
 	}
 }
 
+// TestZeroBytesAfterALengthPrefixedUnitAreTheFramings: ffmpeg's MP4 muxer leaves the zero byte of a
+// four-byte start code on the end of the unit before it, and a unit never ends in 0x00 (7.4.2), so
+// the length-prefixed form gives the units the byte stream does; the header is never trimmed.
+func TestZeroBytesAfterALengthPrefixedUnitAreTheFramings(t *testing.T) {
+	annexB := []byte{0, 0, 0, 1, 0x40, 1, 0xaa, 0xbb, 0, 0, 0, 1, 0x42, 1, 0xcc, 0, 0, 0, 1, 0x26, 1, 0xdd, 0xee}
+	want, err := SplitAnnexB(annexB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prefixed []byte
+	for i, u := range want {
+		body := append(header(u.Type, 0, 0), u.Payload...)
+		if i < 2 { // the zero byte the muxer leaves, once and several times
+			body = append(body, make([]byte, i+1)...)
+		}
+		prefixed = append(prefixed, 0, 0, 0, byte(len(body)))
+		prefixed = append(prefixed, body...)
+	}
+	got, err := SplitLengthPrefixed(prefixed, 4)
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("%d units, %v", len(got), err)
+	}
+	for i := range want {
+		if got[i].Type != want[i].Type || !bytes.Equal(got[i].Payload, want[i].Payload) {
+			t.Errorf("unit %d: %+v, the byte stream gives %+v", i, got[i], want[i])
+		}
+	}
+	// Zero payload bytes only: the header stays, the payload is empty.
+	units, err := SplitLengthPrefixed([]byte{0, 0, 0, 4, 0x04, 0x01, 0, 0}, 4)
+	if err != nil || len(units) != 1 || units[0].Type != UnitTSAN || len(units[0].Payload) != 0 {
+		t.Errorf("%+v, %v", units, err)
+	}
+	// A header that ends in a zero byte keeps it: the second byte of a unit is
+	// nuh_temporal_id_plus1 and never 0, the first can be (type 0, layer 0 is 0x00 0x01).
+	units, err = SplitLengthPrefixed([]byte{0, 0, 0, 3, 0x00, 0x01, 0}, 4)
+	if err != nil || len(units) != 1 || units[0].Type != UnitTrailN || len(units[0].Payload) != 0 {
+		t.Errorf("%+v, %v", units, err)
+	}
+}
+
 // TestWhichTypesCarryPicturesAndWhichCanStandAlone.
 //
 // ⛔ HEVC names sixteen kinds of slice segment where H.264 has one flag, and which
