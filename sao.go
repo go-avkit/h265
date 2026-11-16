@@ -3,6 +3,8 @@
 
 package h265
 
+import "github.com/go-videodsp/kernels/hevc"
+
 // The sample adaptive offset process (8.7.3). It runs on the deblocked picture, one
 // coding tree block at a time, reading the deblocked samples and writing the picture.
 
@@ -81,6 +83,10 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 		for k := 0; k < 4; k++ {
 			delta[(k+int(p.BandPos[c]))&31] = int(p.Offset[c][k])
 		}
+		if off, ok := saoOffsets(&p.Offset[c]); ok && !anyNoFilter &&
+			hevc.TrySAOBand(pl.Pix, y0*pl.Stride+x0, pl.Stride, src, y0*pl.Stride+x0, pl.Stride, cw, ch, bitDepth, int(p.BandPos[c]), &off) == nil {
+			return
+		}
 		shift := uint(bitDepth - 5)
 		for j := 0; j < ch; j++ {
 			row := src[(y0+j)*pl.Stride+x0 : (y0+j)*pl.Stride+x0+cw]
@@ -109,6 +115,13 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 				usable[dy+1][dx+1] = ps.saoUsable(ny*l.WidthCtbs+nx, rsCur, pps)
 			}
 		}
+	}
+	// The interior of the block, where both neighbours lie inside it, goes to the kernels
+	// (bit depth up to 12, no sample that must stay as it is); the border below stays in Go.
+	kernelDone := false
+	if off, ok := saoOffsets(&p.Offset[c]); ok && !anyNoFilter && cw >= 3 && ch >= 3 {
+		i := (y0+1)*pl.Stride + x0 + 1
+		kernelDone = hevc.TrySAOEdge(pl.Pix, i, pl.Stride, src, i, pl.Stride, cw-2, ch-2, bitDepth, int(class), &off) == nil
 	}
 	// edge is the sample ( x, y ) with its neighbours checked one by one.
 	edge := func(x, y int) {
@@ -155,6 +168,9 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 		if !skip(x0+cw-1, y) {
 			edge(x0+cw-1, y)
 		}
+		if kernelDone {
+			continue
+		}
 		// the interior: both neighbours are in this block, whose samples are all usable
 		oa, ob := va*pl.Stride+ha, vb*pl.Stride+hb
 		base := y*pl.Stride + x0
@@ -187,4 +203,16 @@ func sign(v int) int {
 		return -1
 	}
 	return 0
+}
+
+// saoOffsets are the four offsets of a block as the kernels take them; false when one does
+// not fit 16 bits (it cannot in a valid stream: 31 << log2OffsetScale).
+func saoOffsets(o *[4]int32) (out [4]int16, ok bool) {
+	for i, v := range o {
+		if v < -1<<15 || v >= 1<<15 {
+			return out, false
+		}
+		out[i] = int16(v)
+	}
+	return out, true
 }
