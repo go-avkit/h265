@@ -60,6 +60,9 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 	}
 	switch {
 	case xFrac == 0 && yFrac == 0:
+		if !kernelRefused("Widen", hevc.TryWiden(out, 0, w, src, 0, ss, w, h, int(shift3))) {
+			return
+		}
 		for y := 0; y < h; y++ {
 			o := out[y*w : y*w+w]
 			row := src[y*ss : y*ss+w][:len(o)]
@@ -68,11 +71,7 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 			}
 		}
 	case yFrac == 0:
-		if kernelH(sc, src, ss, w, h, bitDepth, taps[xFrac]) {
-			o := out[:h*w]
-			for i, v := range sc.mid[:len(o)] {
-				o[i] = int32(v)
-			}
+		if kernelHW(src, ss, w, h, bitDepth, taps[xFrac], out) {
 			return
 		}
 		hpass(src, ss, h, w, taps[xFrac], shift1, out)
@@ -147,6 +146,18 @@ func kernelH(sc *interpScratch, src []uint16, ss, w, rows, bitDepth int, taps []
 		}
 	}
 	return true
+}
+
+// kernelHW runs the horizontal filter of a block with no vertical fraction straight into out
+// (int32; src starting at the leftmost tap column); false when the kernels refuse the call,
+// which then runs in Go.
+func kernelHW(src []uint16, ss, w, h, bitDepth int, taps []int32, out []int32) bool {
+	if len(taps) == 4 {
+		c := coefficients4(taps)
+		return !kernelRefused("HPassW4", hevc.TryHPassW4(out, 0, w, src, 1, ss, w, h, bitDepth, &c))
+	}
+	c := coefficients(taps)
+	return !kernelRefused("HPassW8", hevc.TryHPassW8(out, 0, w, src, 3, ss, w, h, bitDepth, &c))
 }
 
 // kernelV runs the vertical filter of a block with no horizontal fraction over the samples
