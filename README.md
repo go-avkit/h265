@@ -19,14 +19,31 @@ pics, err := h265.SplitPictures(units, pps)   // without decoding any
 
 ## What it is not
 
-**It does not decode pictures.** There is no CABAC, no residual, no transform,
-no prediction and no deblocking — nothing here turns a bitstream into pixels. It
-reads the syntax a caller needs in order to describe a track, cut a stream on
-picture boundaries, or hand slices to something that does decode.
+**It does not decode HEVC yet.** Since v0.14.0 it carries the first part of a
+decoder of our own, and **inter prediction is not reconstructed yet**
+(`ErrNotReconstructed`), so no inter picture comes out of it. What v0.14.0 has:
 
-A decoder built on this reader is being designed, not yet written:
-[docs/design/hevc.md](docs/design/hevc.md) (profile of the decoder it would
-replace, stages, kernels, conformance, target).
+- the CABAC engine and the full slice-data syntax (7.3.8): all 52215 slices of
+  the conformance suite (v1 and RExt) walk to their last bit;
+- QP, scaling lists, dequantisation and inverse transforms (8.6);
+- intra prediction and picture construction (8.4, 8.6.7), with deblocking
+  (8.7.2) and SAO (8.7.3): all 509 hashed all-intra conformance pictures match
+  their decoded picture hash SEI;
+- the decoded picture buffer: RPS marking, unavailable pictures, output and
+  bumping (C.5.2), conformance-window cropping; all 10238 pictures of the suite
+  run through it;
+- SEI parsing and the decoded picture hash (MD5, CRC, checksum).
+
+`decode` does not use it: it still wraps a third-party decoder for HEVC.
+
+**Behaviour change in v0.14.0:** `Unit.TemporalID` is now TemporalId (0 for the
+base layer, as 7.4.2.2 defines it); every version up to v0.13.2 returned
+TemporalId + 2. A unit stating `nuh_temporal_id_plus1 = 0` is refused with
+`ErrTemporalIDPlus1`. `POCCounter` used the wrong value too, so its picture order
+counts were wrong after the first picture on real streams.
+
+The design of the decoder: [docs/design/hevc.md](docs/design/hevc.md) (profile
+of the decoder it would replace, stages, kernels, conformance, target).
 
 ## What is in it
 
