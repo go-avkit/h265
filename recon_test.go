@@ -274,8 +274,13 @@ func TestReconstructionRefusesInterCodingUnits(t *testing.T) {
 		ww, ps, plans := ttCase(t, rand.New(rand.NewPCG(seed, seed+11)))
 		payload, hdr := ww.writeSegment(plans[0])
 		frame := NewDecodedPicture(ww.sps)
-		err := DecodeSliceData(ps, Unit{Payload: payload}, hdr, ww.pps, NewReconstructor(frame, ww.sps, ww.pps).Decoder())
-		if errors.Is(err, ErrNotReconstructed) {
+		rec := NewReconstructor(frame, ww.sps, ww.pps)
+		_ = DecodeSliceData(ps, Unit{Payload: payload}, hdr, ww.pps, rec.Decoder())
+		if errors.Is(rec.Err(), ErrNotReconstructed) {
+			// and once refused, no later unit is reconstructed on top of it
+			if err := rec.Unit(&SliceWalker{chroma: 1}, &CodingUnit{}, &TransformUnit{}); !errors.Is(err, ErrNotReconstructed) {
+				t.Errorf("a unit after the refusal gave %v", err)
+			}
 			return
 		}
 	}
