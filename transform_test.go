@@ -285,3 +285,30 @@ func TestResidualModifications(t *testing.T) {
 		t.Errorf("a negative scale: %v", c)
 	}
 }
+
+// A bit depth of 20 makes the final shift of the residual (8-299) zero, which the kernels'
+// transforms do not take: they refuse (counted), and the Go butterflies give the text's result.
+func TestResidualFallsBackToTheGoTransformWhenTheKernelRefuses(t *testing.T) {
+	rng := rand.New(rand.NewPCG(123, 124))
+	for _, intraLuma := range []bool{false, true} {
+		p := BlockParams{Log2Size: 2, BitDepth: 20, QP: 4, Intra: intraLuma}
+		levels := make([]int32, 16)
+		for i := range levels {
+			levels[i] = int32(rng.IntN(200) - 100)
+		}
+		got := make([]int32, 16)
+		refusals := countRefusals(t, func() {
+			if err := Residual(levels, p, got); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if refusals["IDCT"] != 1 {
+			t.Errorf("intra %v: refusals %v", intraLuma, refusals)
+		}
+		for i, w := range refResidual(levels, p) {
+			if got[i] != w {
+				t.Fatalf("intra %v: sample %d is %d, the text gives %d", intraLuma, i, got[i], w)
+			}
+		}
+	}
+}
