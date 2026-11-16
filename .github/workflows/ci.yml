@@ -64,6 +64,18 @@ jobs:
             grep -F -- "conformance-count: $c" conformance.log || { echo "::error::no 'conformance-count: $c' line"; exit 1; }
           done
 
+  # The bench harness is its own module (it depends on decode, which needs a newer Go
+  # than this module's floor): it must still build, with the toolchain its go.mod names.
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tools/bench/go.mod
+      - run: go vet ./...
+        working-directory: tools/bench
+
   # Every file must be gofmt-clean.
   gofmt:
     runs-on: ubuntu-latest
