@@ -20,7 +20,7 @@ require (
 	github.com/go-fft/fft v0.38.0 // indirect
 	github.com/go-numerics/special v0.4.0 // indirect
 	github.com/go-simd/floats v0.24.0 // indirect
-	github.com/go-videodsp/kernels v0.15.0 // indirect
+	github.com/go-videodsp/kernels v0.16.0 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
 	github.com/mewkiz/flac v1.0.14 // indirect
 	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect

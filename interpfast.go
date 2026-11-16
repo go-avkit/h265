@@ -75,6 +75,9 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 		}
 		hpass(src, ss, h, w, taps[xFrac], shift1, out)
 	case xFrac == 0:
+		if kernelV(src, ss, w, h, bitDepth, taps[yFrac], out) {
+			return
+		}
 		vpass(src, ss, w, h, taps[yFrac], shift1, out)
 	default:
 		mid := sc.mid[:hh*w]
@@ -142,6 +145,18 @@ func kernelH(sc *interpScratch, src []uint16, ss, w, rows, bitDepth int, taps []
 		}
 	}
 	return true
+}
+
+// kernelV runs the vertical filter of a block with no horizontal fraction over the samples
+// themselves (src starting at the topmost tap row) into out; false when the kernels refuse the
+// call, which then runs in Go.
+func kernelV(src []uint16, ss, w, h, bitDepth int, taps []int32, out []int32) bool {
+	if len(taps) == 4 {
+		c := coefficients4(taps)
+		return !kernelRefused("VPassU4", hevc.TryVPassU4(out, 0, w, src, ss, ss, w, h, bitDepth, &c))
+	}
+	c := coefficients(taps)
+	return !kernelRefused("VPassU8", hevc.TryVPassU8(out, 0, w, src, 3*ss, ss, w, h, bitDepth, &c))
 }
 
 // kernelRefusal, when set, is called with the name of the entry point each time the

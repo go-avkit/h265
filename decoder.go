@@ -57,7 +57,10 @@ type Options struct {
 // Stride can be larger than its Width, and a plane's Pix runs to its last sample): the same
 // memory the decoder reads as a reference picture for later ones. The caller must therefore
 // treat the planes as read-only: writing to them changes the pictures predicted from this
-// one. Copy the plane first to modify it.
+// one. Call Picture.Clone first to get a copy that can be modified.
+//
+// Behaviour change (the release that made planes views): output planes used to be copies the
+// caller could write to; callers that modify them must Clone the picture first.
 type Output struct {
 	Picture *DecodedPicture
 	POC     int32

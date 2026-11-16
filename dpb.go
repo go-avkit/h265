@@ -309,6 +309,23 @@ func (d *DPB) Flush() {
 	d.pics = d.pics[:0]
 }
 
+// Clone returns a copy of the picture that the caller owns: every plane is its own
+// allocation, Stride equal to Width, so it can be written to without touching the decoder's
+// pictures. The planes of an Output picture are read-only views (see Output); Clone it first to
+// modify it.
+func (p *DecodedPicture) Clone() *DecodedPicture {
+	out := &DecodedPicture{Components: p.Components, BitDepth: p.BitDepth}
+	for c := 0; c < p.Components; c++ {
+		pl := &p.Planes[c]
+		pix := make([]uint16, pl.Width*pl.Height)
+		for y := 0; y < pl.Height; y++ {
+			copy(pix[y*pl.Width:(y+1)*pl.Width], pl.Pix[y*pl.Stride:y*pl.Stride+pl.Width])
+		}
+		out.Planes[c] = Plane{Width: pl.Width, Height: pl.Height, Stride: pl.Width, Pix: pix}
+	}
+	return out
+}
+
 // Crop returns the picture cut to the conformance window of sps (C.5.2.4). It is a view:
 // each plane of the result is the window of the plane of p, the same memory with p's stride,
 // so nothing is copied. See Output for what that means for the caller.
