@@ -258,6 +258,15 @@ func TestDecoderRefusals(t *testing.T) {
 	if !hasErr(errs, ErrCorruptPicture) || d.Stats().Failed == 0 || len(outs) != d.Stats().Pictures {
 		t.Errorf("a cut slice: %v %+v, %d output", errs, d.Stats(), len(outs))
 	}
+	corrupt := 0
+	for _, o := range outs {
+		if o.Corrupt {
+			corrupt++
+		}
+	}
+	if corrupt == 0 || corrupt > d.Stats().Failed {
+		t.Errorf("a cut slice: %d output pictures flagged corrupt, %d failed", corrupt, d.Stats().Failed)
+	}
 
 	// the first picture lost: the ones that predict from it have no reference
 	d = NewDecoder(Options{})

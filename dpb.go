@@ -42,6 +42,10 @@ type DPBPicture struct {
 	LatencyCount    int
 	Generated       bool
 	TemporalID      uint8
+	// Tag is the Tag of the first slice segment of the picture (Unit.Tag).
+	Tag uint64
+	// Corrupt says the picture could not be decoded to its end (Stats.Failed counts it).
+	Corrupt bool
 }
 
 // PictureInfo is what the buffer needs to know about the picture being started.
