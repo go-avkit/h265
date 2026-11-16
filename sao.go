@@ -84,7 +84,7 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 			delta[(k+int(p.BandPos[c]))&31] = int(p.Offset[c][k])
 		}
 		if off, ok := saoOffsets(&p.Offset[c]); ok && !anyNoFilter &&
-			hevc.TrySAOBand(pl.Pix, y0*pl.Stride+x0, pl.Stride, src, y0*pl.Stride+x0, pl.Stride, cw, ch, bitDepth, int(p.BandPos[c]), &off) == nil {
+			!kernelRefused("SAOBand", hevc.TrySAOBand(pl.Pix, y0*pl.Stride+x0, pl.Stride, src, y0*pl.Stride+x0, pl.Stride, cw, ch, bitDepth, int(p.BandPos[c]), &off)) {
 			return
 		}
 		shift := uint(bitDepth - 5)
@@ -121,7 +121,7 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 	kernelDone := false
 	if off, ok := saoOffsets(&p.Offset[c]); ok && !anyNoFilter && cw >= 3 && ch >= 3 {
 		i := (y0+1)*pl.Stride + x0 + 1
-		kernelDone = hevc.TrySAOEdge(pl.Pix, i, pl.Stride, src, i, pl.Stride, cw-2, ch-2, bitDepth, int(class), &off) == nil
+		kernelDone = !kernelRefused("SAOEdge", hevc.TrySAOEdge(pl.Pix, i, pl.Stride, src, i, pl.Stride, cw-2, ch-2, bitDepth, int(class), &off))
 	}
 	// edge is the sample ( x, y ) with its neighbours checked one by one.
 	edge := func(x, y int) {

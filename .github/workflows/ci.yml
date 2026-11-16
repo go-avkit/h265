@@ -112,7 +112,10 @@ jobs:
         shell: bash
         run: |
           COVERPKG=$(go list ./... | paste -sd, -)
-          go test -race -coverpkg="$COVERPKG" -coverprofile=cover.out ./...
+          # -race plus coverage on a hosted macOS or Windows runner ran past go test's
+          # default 10 min (both lanes, run 43865799739, panic at 600 s with
+          # TestTransformTreeCorruptStreams running); 30 min leaves three times that.
+          go test -race -timeout 30m -coverpkg="$COVERPKG" -coverprofile=cover.out ./...
           go tool cover -func=cover.out | tail -n 25
           cov=$(go tool cover -func=cover.out | tail -1 | awk '{print $3}' | tr -d '%')
           echo "coverage: ${cov}%"
