@@ -19,10 +19,22 @@ pics, err := h265.SplitPictures(units, pps)   // without decoding any
 
 ## What it is not
 
-**It is not a finished decoder.** It carries the parts of one of our own, and
-the pieces are not yet joined into a decoding API: the conformance test drives
-them picture by picture. Every hashed picture of the suite that it decodes
-(intra and inter, 7147 of them) matches its decoded picture hash SEI. What it has:
+**It is a decoder of our own, not yet a fast one.** `Decoder` takes NAL units in
+decoding order and returns the pictures in output order:
+
+```go
+d := h265.NewDecoder(h265.Options{VerifyHash: true})
+for _, u := range units {
+	pics, err := d.Decode(u) // err does not stop the decoder; the pictures are valid
+}
+pics, err := d.Flush()
+```
+
+Every hashed picture of the conformance suite that it decodes (intra and inter,
+7147 of them) matches its decoded picture hash SEI; 21 streams use
+`cabac_bypass_alignment_enabled_flag`, which it refuses. Limits (`Limits`) bound the
+picture size and the memory of the picture buffer; a fuzz target covers the whole
+decoder. Speed is not measured yet. What it has:
 
 - the CABAC engine and the full slice-data syntax (7.3.8): all 52215 slices of
   the conformance suite (v1 and RExt) walk to their last bit;
@@ -56,6 +68,7 @@ of the decoder it would replace, stages, kernels, conformance, target).
 | `ParseSPS`, `ParsePPS` | the parameter sets |
 | `ParseSliceSegmentHeader`, `SliceSegmentHeader`, `SliceType` | the slice segment header |
 | `SplitPictures`, `Picture` | coded pictures, from `first_slice_segment_in_pic_flag` |
+| `NewDecoder`, `Decoder`, `Options`, `Limits`, `Output` | the decoder: units in, cropped pictures out in output order, with bounds on picture size and buffer memory and an optional check of each picture against its hash SEI |
 | `POCCounter`, `POC` | picture order counts, clause 8.3.1 |
 | `ShortTermRPS`, `RefPic`, `LongTermRefPic` | the reference picture sets a sequence carries |
 | `ReferencesOf`, `PictureRefs`, `LongTermRef` | what one coded picture says it still needs |

@@ -430,3 +430,19 @@ func seedBytes(t testing.TB) []byte {
 	}
 	return data
 }
+
+// A picture whose size is not a multiple of the smallest coding block would have blocks
+// past its edge: the fuzzer found a panic there, and the sequence parameter set is
+// refused (7.4.3.2.1).
+func TestAPictureSizeThatIsNoMultipleOfTheCodingBlockIsRefused(t *testing.T) {
+	for _, size := range [][2]uint32{{70, 64}, {64, 66}, {11, 23}} {
+		s := set{subLayers: 1, chroma: 1, width: size[0], height: size[1], sizes: []uint32{0, 3, 0, 3, 0, 0}}
+		if _, err := ParseSPS(s.build()); !errors.Is(err, ErrUnsupportedSPS) {
+			t.Errorf("%dx%d: %v", size[0], size[1], err)
+		}
+	}
+	good := set{subLayers: 1, chroma: 1, width: 72, height: 64, sizes: []uint32{0, 3, 0, 3, 0, 0}}
+	if _, err := ParseSPS(good.build()); err != nil {
+		t.Errorf("72x64: %v", err)
+	}
+}
