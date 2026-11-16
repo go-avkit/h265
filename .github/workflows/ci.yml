@@ -25,6 +25,7 @@ jobs:
   # missing directory or a hash that differs fails the job; the tests do not skip.
   conformance:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       H265_CONFORMANCE_SKIP_OK: '0'
       H265_CONFORMANCE_DIR: ${{ github.workspace }}/.conformance
@@ -48,7 +49,10 @@ jobs:
           -base https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/RExt
           -manifest testdata/conformance-rext.sha256
       - name: conformance tests
-        run: go test -count=1 -v -run 'Conformance|Traces' . > conformance.log 2>&1 || { cat conformance.log; exit 1; }
+        # The suite decodes 196 streams to their pictures, which took 10 min 34 s on a
+        # hosted runner when it was 7147 verified pictures (run 43789348927: it hit the
+        # default 10 min timeout of go test); 45 min leaves four times that.
+        run: go test -count=1 -timeout 45m -v -run 'Conformance|Traces' . > conformance.log 2>&1 || { cat conformance.log; exit 1; }
       # A run that executed nothing would be green: name the passes.
       - name: the tests ran
         run: |
