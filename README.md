@@ -19,7 +19,7 @@ pics, err := h265.SplitPictures(units, pps)   // without decoding any
 
 ## What it is not
 
-**It is a decoder of our own, not yet a fast one.** `Decoder` takes NAL units in
+**It is a decoder of our own, and it is slow (see Speed below).** `Decoder` takes NAL units in
 decoding order and returns the pictures in output order:
 
 ```go
@@ -34,7 +34,7 @@ Every hashed picture of the conformance suite that it decodes (intra and inter,
 7147 of them) matches its decoded picture hash SEI; 21 streams use
 `cabac_bypass_alignment_enabled_flag`, which it refuses. Limits (`Limits`) bound the
 picture size and the memory of the picture buffer; a fuzz target covers the whole
-decoder. Speed is not measured yet. CI pins these counts. The streams that carry no
+decoder. Speed is below. CI pins these counts. The streams that carry no
 hash SEI are held to the md5 of their decoded output (output order, cropped, as a
 yuv file) that the suite ships: 45 of the 52 such streams it decodes match; the other
 7 ship no md5 file, so nothing verifies them. What it has:
@@ -53,6 +53,26 @@ yuv file) that the suite ships: 45 of the 52 such streams it decodes match; the 
 - SEI parsing and the decoded picture hash (MD5, CRC, checksum).
 
 `decode` does not use it: it still wraps a third-party decoder for HEVC.
+
+### Speed
+
+v0.17.0 is 2.6x faster than v0.16.0 with the output unchanged bit for bit (every
+conformance gate is the same; the md5 of four 1080p outputs equals ffmpeg's).
+Frames per second by CPU time, one core (AMD Ryzen 9 7950X, `taskset`, interleaved
+rounds, load 0.5 to 3, 2026-11-16). The third-party decoder is the one
+go-avkit/decode v0.9.0 uses for HEVC, measured through `DecodeTrack`; ffmpeg is
+6.1.1 with `-threads 1`.
+
+| stream (1080p, 240 or 120 frames) | v0.16.0 | v0.17.0 | third-party | ffmpeg |
+|---|---|---|---|---|
+| alien, Main | 13.5 | 34.5 | 88 | 396 |
+| fade, Main | 13.8 | 36.7 | 80 | 427 |
+| alien, Main 10 | 13.3 | 35.5 | 30.0 | 300 |
+| alien8 | 15.4 | 38.3 | 95 | 430 |
+
+This decoder is still slower than the third-party one on 8-bit streams, an open
+defect, and far from ffmpeg on every stream; it is faster than the third-party
+decoder on Main 10 only. SIMD kernels are next. No parity is claimed.
 
 **Security fix in v0.16.0:** on a hostile SPS (a picture width or height that is
 not a multiple of the minimum coding block size) v0.14.0 and v0.15.0 could panic
