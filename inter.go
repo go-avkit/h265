@@ -3,7 +3,11 @@
 
 package h265
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/go-videodsp/kernels/hevc"
+)
 
 // Inter sample prediction: the fractional sample interpolation process (8.5.3.3.3) and
 // the weighted sample prediction process (8.5.3.3.4).
@@ -109,6 +113,9 @@ func weighted(pl *Plane, x0, y0, w, h int, p [2][]int32, predFlag [2]bool, bitDe
 	shift1 := uint(max(2, 14-bitDepth))
 	bi := predFlag[0] && predFlag[1]
 	l := bit(predFlag[1]) // the list of a uni-predicted block
+	if weightedKernel(pl, x0, y0, w, h, p, bi, l, bitDepth, ew) {
+		return
+	}
 	for y := 0; y < h; y++ {
 		o := pl.Pix[(y0+y)*pl.Stride+x0 : (y0+y)*pl.Stride+x0+w]
 		var a, b []int32
@@ -139,6 +146,26 @@ func weighted(pl *Plane, x0, y0, w, h int, p [2][]int32, predFlag [2]bool, bitDe
 			}
 		}
 	}
+}
+
+// weightedKernel runs the block through the kernels' WeightUni or WeightBi, whose
+// default case is w = 1, o = 0 and log2Wd = max(2, 14 - bitDepth) (8-262 to 8-264 are
+// 8-275 to 8-277 with those values). It reports false when the kernels refuse the block
+// (a width they do not take, a weight outside their bounds), and the loops of weighted
+// then compute it.
+func weightedKernel(pl *Plane, x0, y0, w, h int, p [2][]int32, bi bool, l int, bitDepth int, ew *explicitWeights) bool {
+	log2Wd, w0, w1, o0, o1 := max(2, 14-bitDepth), int32(1), int32(1), int32(0), int32(0)
+	if ew != nil {
+		log2Wd, w0, w1, o0, o1 = ew.log2Wd, ew.w[0], ew.w[1], ew.o[0], ew.o[1]
+	}
+	off := y0*pl.Stride + x0
+	if bi {
+		return hevc.TryWeightBi(pl.Pix, off, pl.Stride, p[0], p[1], 0, w, w, h, bitDepth, log2Wd, w0, w1, o0, o1) == nil
+	}
+	if l == 1 {
+		w0, o0 = w1, o1
+	}
+	return hevc.TryWeightUni(pl.Pix, off, pl.Stride, p[l], 0, w, w, h, bitDepth, log2Wd, w0, o0) == nil
 }
 
 // fullPel is a block of a reference plane at a full-sample position inside the plane.
