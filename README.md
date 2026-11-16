@@ -104,7 +104,7 @@ of the decoder it would replace, stages, kernels, conformance, target).
 | `ParseSPS`, `ParsePPS` | the parameter sets |
 | `ParseSliceSegmentHeader`, `SliceSegmentHeader`, `SliceType` | the slice segment header |
 | `SplitPictures`, `Picture` | coded pictures, from `first_slice_segment_in_pic_flag` |
-| `NewDecoder`, `Decoder`, `Options`, `Limits`, `Output` | the decoder: units in, cropped pictures out in output order (read-only views of the decoder's pictures, each its own allocation that stays valid and unchanged for as long as it is kept; see `Output`; `Picture.Clone` gives a writable copy), with bounds on picture size and buffer memory and an optional check of each picture against its hash SEI |
+| `NewDecoder`, `Decoder`, `Options`, `Limits`, `Output` | the decoder: units in, cropped pictures out in output order (read-only views of the decoder's pictures, each its own allocation that stays valid and unchanged for as long as it is kept; see `Output`; `Picture.Clone` gives a writable copy; a `Unit.Tag` comes back as the `Output.Tag` of the picture whose first slice segment carried it), with bounds on picture size and buffer memory and an optional check of each picture against its hash SEI |
 | `POCCounter`, `POC` | picture order counts, clause 8.3.1 |
 | `ShortTermRPS`, `RefPic`, `LongTermRefPic` | the reference picture sets a sequence carries |
 | `ReferencesOf`, `PictureRefs`, `LongTermRef` | what one coded picture says it still needs |

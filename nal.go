@@ -77,6 +77,10 @@ type Unit struct {
 	// which is what it is for.
 	TemporalID uint8
 	Payload    []byte
+	// Tag is the caller's: a decoder carries the Tag of the first slice segment of a picture
+	// to that picture's Output (which is how a container's timestamp finds the picture it
+	// belongs to, however the pictures are reordered). Nothing else reads it.
+	Tag uint64
 }
 
 // IsIDR says the picture starts a new coded video sequence and states no order

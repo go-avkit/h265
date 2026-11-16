@@ -64,6 +64,8 @@ type Options struct {
 type Output struct {
 	Picture *DecodedPicture
 	POC     int32
+	// Tag is the Tag of the first slice segment of the picture (Unit.Tag).
+	Tag uint64
 }
 
 // DecoderStats counts what a decoder has done.
@@ -110,6 +112,7 @@ type decPicture struct {
 	failed bool
 	hash   *PictureHash
 	intra  bool
+	tag    uint64
 }
 
 // NewDecoder starts a decoder; zero limits stand for DefaultLimits.
@@ -123,7 +126,7 @@ func NewDecoder(opt Options) *Decoder {
 	}
 	d := &Decoder{opt: opt, spsM: map[uint32]SPS{}, ppsM: map[uint32]PPS{}, layouts: map[[2]int]*CtbLayout{}}
 	d.dpb.Output = func(p *DPBPicture) {
-		d.out = append(d.out, Output{Picture: p.Frame.Crop(p.SPS), POC: p.POC})
+		d.out = append(d.out, Output{Picture: p.Frame.Crop(p.SPS), POC: p.POC, Tag: p.Tag})
 	}
 	return d
 }
@@ -210,7 +213,7 @@ func (d *Decoder) finish() {
 			}
 		}
 	}
-	d.dpb.Finish(&DPBPicture{POC: c.poc, Frame: c.frame, State: c.state, SPS: c.sps, TemporalID: c.tid}, c.output)
+	d.dpb.Finish(&DPBPicture{POC: c.poc, Frame: c.frame, State: c.state, SPS: c.sps, TemporalID: c.tid, Tag: c.tag}, c.output)
 }
 
 func (d *Decoder) decode(u Unit) {
@@ -366,7 +369,7 @@ func (d *Decoder) begin(u Unit, h SliceHeader, sps SPS, pps PPS) bool {
 		NoOutputOfPriorPics: h.NoOutputOfPriorPics, PicOutput: h.PicOutput, NoRaslOutput: noRasl, First: isFirst}
 	rp, err := d.dpb.Begin(in)
 	d.cur = &decPicture{state: NewPictureState(sps, l), frame: NewDecodedPicture(sps), sps: sps, pps: pps,
-		poc: poc.Value, set: set, rp: rp, output: h.PicOutput, tid: u.TemporalID, intra: true}
+		poc: poc.Value, set: set, rp: rp, output: h.PicOutput, tid: u.TemporalID, intra: true, tag: u.Tag}
 	if err != nil {
 		d.cur.failed = true
 		d.fail(fmt.Errorf("%w: POC %d: %w", ErrCorruptPicture, poc.Value, err))
