@@ -96,6 +96,9 @@ jobs:
       - run: go version
       - run: go vet ./...
       - run: go build ./...
+      # the bench harness is its own module (it depends on decode): it must still build
+      - run: go vet ./...
+        working-directory: tools/bench
       - name: Test + 100% coverage gate
         shell: bash
         run: |
