@@ -10,12 +10,16 @@ const maxLog2WeightDenom = 7
 
 // wpOffsetHalfRange is WpOffsetHalfRangeY and WpOffsetHalfRangeC, 7.4.7.3.
 //
-// ⛔ It is 1 << 7 unless high_precision_offsets_enabled_flag is set, and that
-// flag lives in the sequence RANGE EXTENSION, which this package does not read.
-// A stream that sets it states its offsets over a wider range and would be
-// refused here. Nothing in this package can tell: the extension sits past
-// everything ParseSPS consumes.
+// It is 1 << 7 unless high_precision_offsets_enabled_flag is set, when it is
+// 1 << ( BitDepth - 1 ) of the component (7-56, 7-57); halfRanges is both.
 const wpOffsetHalfRange = 1 << 7
+
+func halfRanges(sps SPS) (y, c int32) {
+	if sps.Range.HighPrecisionOffsets {
+		return 1 << (sps.BitDepthLuma - 1), 1 << (sps.BitDepthChroma - 1)
+	}
+	return wpOffsetHalfRange, wpOffsetHalfRange
+}
 
 // RefWeight is how one reference picture is weighted, 7.4.7.3.
 //
@@ -47,6 +51,8 @@ type PredWeights struct {
 	// L0 and L1 are as long as the lists they weigh.
 	L0 []RefWeight
 	L1 []RefWeight
+
+	halfY, halfC int32
 }
 
 // readPredWeights reads the table, which is stated only when the picture
@@ -60,6 +66,7 @@ func readPredWeights(r *sticky, sps SPS, refs *PictureRefs) (*PredWeights, error
 	if denom > maxLog2WeightDenom {
 		return nil, fmt.Errorf("%w: a luma weight denominator of %d", ErrSliceHeader, denom)
 	}
+	w.halfY, w.halfC = halfRanges(sps)
 	w.LumaLog2Denom = uint8(denom)
 	w.ChromaLog2Denom = w.LumaLog2Denom
 
@@ -136,7 +143,7 @@ func readWeightList(r *sticky, w PredWeights, chroma bool, n int) ([]RefWeight, 
 			}
 			// ⛔ The luma offset is added to a sample. Unbounded, it is not a
 			// bright picture: it is a number the arithmetic cannot carry.
-			if e.LumaOffset < -wpOffsetHalfRange || e.LumaOffset >= wpOffsetHalfRange {
+			if e.LumaOffset < -w.halfY || e.LumaOffset >= w.halfY {
 				return nil, fmt.Errorf("%w: a luma offset of %d", ErrSliceHeader, e.LumaOffset)
 			}
 		}
@@ -154,14 +161,14 @@ func readWeightList(r *sticky, w PredWeights, chroma bool, n int) ([]RefWeight, 
 				// ffmpeg uses, which is a guard against overflow in its own
 				// arithmetic rather than the range the format states. libde265
 				// bounds it as below, and the two disagree by 256 times.
-				if do < -4*wpOffsetHalfRange || do >= 4*wpOffsetHalfRange {
+				if do < -4*w.halfC || do >= 4*w.halfC {
 					return nil, fmt.Errorf("%w: a chroma offset difference of %d", ErrSliceHeader, do)
 				}
 				e.ChromaWeight[j] = 1<<w.ChromaLog2Denom + dw
 				// ⛔ The chroma offset is not the difference the slice states:
 				// the weight has to be folded back out of it first, 7.4.7.3.
-				v := wpOffsetHalfRange + do - (wpOffsetHalfRange*e.ChromaWeight[j])>>w.ChromaLog2Denom
-				e.ChromaOffset[j] = clip(v, -wpOffsetHalfRange, wpOffsetHalfRange-1)
+				v := w.halfC + do - (w.halfC*e.ChromaWeight[j])>>w.ChromaLog2Denom
+				e.ChromaOffset[j] = clip(v, -w.halfC, w.halfC-1)
 			}
 		}
 		// No check at the end of the iteration: every read above is followed by

@@ -8,8 +8,8 @@ import (
 	"fmt"
 )
 
-// ErrNotReconstructed means a coding unit needs a process this package does not
-// have yet (inter prediction).
+// ErrNotReconstructed means a coding unit needs what the reconstruction was not given:
+// an inter coding unit without the reference lists of its slice (Reconstructor.Inter).
 var ErrNotReconstructed = errors.New("h265: the coding unit needs a process that is not implemented")
 
 // NewDecodedPicture allocates the picture the sequence parameter set describes, a
@@ -46,7 +46,16 @@ type Reconstructor struct {
 	pps   PPS
 	// factors are the scaling factors of the picture (nil: flat).
 	factors *ScalingFactors
+	// Inter is the slice being decoded when it is a P or B slice: the lists the inter
+	// prediction reads, the same value as PictureState.Inter.
+	Inter *InterSlice
+	err   error
 }
+
+// Err is the first error the prediction of an inter coding unit met. Such a unit is
+// predicted when it is reported, which has no way to return one, so the caller
+// checks it after the slice.
+func (r *Reconstructor) Err() error { return r.err }
 
 // NewReconstructor starts the reconstruction of a picture into frame; the picture
 // parameter set is the one its slices use.
@@ -62,6 +71,12 @@ func (r *Reconstructor) Decoder() CodingUnitFunc {
 // CodingUnit is called with each coding unit once its syntax is read: a PCM block
 // is the reconstruction itself (8-12, 8-15, 8-16).
 func (r *Reconstructor) CodingUnit(cu *CodingUnit) {
+	if cu.Mode != ModeIntra { // inter and skipped: the prediction (8.5.3.3), the residual follows
+		if err := r.predictInter(cu); err != nil && r.err == nil {
+			r.err = err
+		}
+		return
+	}
 	if !cu.PCM {
 		return
 	}
@@ -86,24 +101,30 @@ func (r *Reconstructor) CodingUnit(cu *CodingUnit) {
 	}
 }
 
-// Unit reconstructs the blocks of a transform unit of an intra coding unit
-// (8.4.4.1): per block the intra prediction, the residual, and their sum.
+// Unit reconstructs the blocks of a transform unit: of an intra coding unit per block
+// the intra prediction, the residual, and their sum (8.4.4.1); of an inter one the
+// residual (8.5.4) added to the prediction CodingUnit already wrote.
 func (r *Reconstructor) Unit(w *SliceWalker, cu *CodingUnit, tu *TransformUnit) error {
-	if cu.Mode != ModeIntra {
-		return ErrNotReconstructed
+	if r.err != nil {
+		return r.err
 	}
 	cat := w.chroma
-	part := cu.partOf(tu.X0, tu.Y0)
+	intra := cu.Mode == ModeIntra
+	var modeY, modeC int
+	if intra {
+		part := cu.partOf(tu.X0, tu.Y0)
+		modeY, modeC = int(cu.IntraPredModeY[part]), int(cu.IntraPredModeC[part])
+	}
 	var rY []int32 // the luma residual of this unit, for cross-component prediction
 	n := 1 << uint(tu.Log2Size)
 	res := make([]int32, n*n)
 	if tu.CbfLuma {
-		if err := r.residual(w, cu, tu, tu.lumaBlock(), 0, int(cu.IntraPredModeY[part]), res); err != nil {
+		if err := r.residual(w, cu, tu, tu.lumaBlock(), 0, modeY, res); err != nil {
 			return err
 		}
 	}
 	rY = res
-	r.block(w, cu, 0, tu.X0, tu.Y0, tu.Log2Size, int(cu.IntraPredModeY[part]), rY)
+	r.reconstruct(w, cu, 0, tu.X0, tu.Y0, tu.Log2Size, modeY, rY)
 	if cat == 0 {
 		return nil
 	}
@@ -132,14 +153,14 @@ func (r *Reconstructor) Unit(w *SliceWalker, cu *CodingUnit, tu *TransformUnit) 
 		for t := 0; t < blocks; t++ {
 			rc := make([]int32, nC*nC)
 			if b := tu.chromaBlock(c, t, log2C, cat); b != nil {
-				if err := r.residual(w, cu, tu, b, c, int(cu.IntraPredModeC[part]), rc); err != nil {
+				if err := r.residual(w, cu, tu, b, c, modeC, rc); err != nil {
 					return err
 				}
 			}
 			if cat == 3 && r.pps.Range.CrossComponentPrediction && tu.ResScaleVal[c-1] != 0 {
 				CrossComponent(rc, rY, tu.ResScaleVal[c-1], int(r.sps.BitDepthLuma), int(r.sps.BitDepthChroma))
 			}
-			r.block(w, cu, c, xC, yC+t*nC, log2C, int(cu.IntraPredModeC[part]), rc)
+			r.reconstruct(w, cu, c, xC, yC+t*nC, log2C, modeC, rc)
 		}
 	}
 	return nil
@@ -187,21 +208,47 @@ func (r *Reconstructor) residual(w *SliceWalker, cu *CodingUnit, tu *TransformUn
 	bp := BlockParams{
 		Log2Size: log2, CIdx: cIdx, QP: int(tu.QpPrime[cIdx]), BitDepth: int(r.sps.BitDepthLuma),
 		ExtendedPrecision: r.sps.Range.ExtendedPrecisionProcessing, TransquantBypass: cu.TransquantBypass,
-		TransformSkip: b.Block.TransformSkip, Intra: true, RotateEnabled: r.sps.Range.TransformSkipRotation,
+		TransformSkip: b.Block.TransformSkip, Intra: cu.Mode == ModeIntra, RotateEnabled: r.sps.Range.TransformSkipRotation,
 	}
 	if cIdx > 0 {
 		bp.BitDepth = int(r.sps.BitDepthChroma)
 	}
 	if r.factors != nil {
-		bp.Factor = r.factors[log2-2][cIdx]
+		bp.Factor = r.factors[log2-2][cIdx+3*(1-b2i32(bp.Intra))] // matrixId: 3 more for inter (Table 7-4)
 	}
 	if err := Residual(b.Block.Levels, bp, out); err != nil {
 		return err
 	}
-	if r.sps.Range.ImplicitRDPCM && (b.Block.TransformSkip || cu.TransquantBypass) && (mode == 10 || mode == 26) {
+	switch {
+	case bp.Intra && r.sps.Range.ImplicitRDPCM && (b.Block.TransformSkip || cu.TransquantBypass) && (mode == 10 || mode == 26):
 		RDPCM(out, 1<<uint(log2), mode/26)
+	case !bp.Intra && b.Block.ExplicitRDPCM: // explicit_rdpcm_dir_flag 0 is horizontal
+		RDPCM(out, 1<<uint(log2), bit(b.Block.ExplicitRDPCMDir))
 	}
 	return nil
+}
+
+// reconstruct finishes one block of a transform unit: an intra block is predicted and
+// gets its residual, an inter block gets it added to the prediction already in the
+// picture.
+func (r *Reconstructor) reconstruct(w *SliceWalker, cu *CodingUnit, c, x, y, log2, mode int, res []int32) {
+	if cu.Mode == ModeIntra {
+		r.block(w, cu, c, x, y, log2, mode, res)
+		return
+	}
+	n := 1 << uint(log2)
+	pl := &r.Frame.Planes[c]
+	bitDepth := int(r.sps.BitDepthLuma)
+	if c > 0 {
+		bitDepth = int(r.sps.BitDepthChroma)
+	}
+	maxVal := int32(1)<<uint(bitDepth) - 1
+	for j := 0; j < n; j++ {
+		for i := 0; i < n; i++ {
+			p := &pl.Pix[(y+j)*pl.Stride+x+i]
+			*p = uint16(min(max(int32(*p)+res[j*n+i], 0), maxVal))
+		}
+	}
 }
 
 // block predicts the block of component c at ( x, y ) in that component's samples

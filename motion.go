@@ -33,6 +33,9 @@ type InterSlice struct {
 	MaxMergeCand   int
 	// Log2ParMrgLevel is Log2ParMrgLevel (7-37).
 	Log2ParMrgLevel int
+	// Weights is pred_weight_table when the slice weighs its prediction explicitly
+	// (weightedPredFlag of 8.5.3.3.4.1 is 1), nil otherwise.
+	Weights *PredWeights
 }
 
 // NewInterSlice derives ColPic and NoBackwardPredFlag (8.3.5) for a slice whose lists are
@@ -40,7 +43,7 @@ type InterSlice struct {
 func NewInterSlice(hdr SliceHeader, pps PPS, poc int32, l0, l1 []RefEntry) (*InterSlice, error) {
 	s := &InterSlice{Type: hdr.Type, POC: poc, List: [2][]RefEntry{l0, l1}, TemporalMVP: hdr.Refs.TemporalMVP,
 		ColFromL0: hdr.Refs.CollocatedFromL0 || hdr.Type != SliceB, MaxMergeCand: int(hdr.Refs.MaxMergeCand),
-		Log2ParMrgLevel: int(pps.Log2ParMrgLevel), NoBackwardPred: true}
+		Log2ParMrgLevel: int(pps.Log2ParMrgLevel), NoBackwardPred: true, Weights: hdr.Refs.Weights}
 	for _, l := range s.List {
 		for _, e := range l {
 			if e.POC > poc {
