@@ -4,6 +4,7 @@
 package h265
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/go-videodsp/kernels/hevc"
@@ -18,22 +19,20 @@ var (
 	saoVPos = [4][2]int{{0, 0}, {-1, 1}, {-1, 1}, {-1, 1}}
 )
 
-// saoScratch holds the buffers of the copy SAO reads its neighbours from.
-var saoScratch = sync.Pool{New: func() any { return new([]uint16) }}
+// saoScratch holds the buffers of the copy SAO reads its neighbours from, one pool for each
+// sample type.
+var (
+	saoScratch8  = sync.Pool{New: func() any { return new([]uint8) }}
+	saoScratch16 = sync.Pool{New: func() any { return new([]uint16) }}
+)
 
 // SAO applies sample adaptive offset to the deblocked picture frame (8.7.3.1) with
 // the parameters the walk read for each coding tree block.
 func (ps *PictureState) SAO(frame *DecodedPicture, sps SPS, pps PPS) {
-	l := ps.Layout
 	anyNoFilter := false
 	for _, nf := range ps.NoFilter {
 		anyNoFilter = anyNoFilter || nf
 	}
-	// the copy of the deblocked plane is scratch: a decoder runs one picture after another,
-	// so the buffer is kept between them instead of allocated and cleared for each
-	bp := saoScratch.Get().(*[]uint16)
-	src := *bp
-	defer func() { *bp = src; saoScratch.Put(bp) }()
 	for c := 0; c < frame.Components; c++ {
 		used := false
 		for i := range ps.Sao {
@@ -43,21 +42,40 @@ func (ps *PictureState) SAO(frame *DecodedPicture, sps SPS, pps PPS) {
 			continue
 		}
 		pl := &frame.Planes[c]
-		src = append(src[:0], pl.Pix...) // recPicture: the deblocked samples
-		subW, subH := int(sps.CodedWidth)/pl.Width, int(sps.CodedHeight)/pl.Height
 		bitDepth := int(sps.BitDepthLuma)
 		if c > 0 {
 			bitDepth = int(sps.BitDepthChroma)
 		}
-		ctbW, ctbH := (1<<uint(sps.Log2CtbSize))/subW, (1<<uint(sps.Log2CtbSize))/subH
-		for ry := 0; ry < l.HeightCtbs; ry++ {
-			for rx := 0; rx < l.WidthCtbs; rx++ {
-				p := &ps.Sao[ry*l.WidthCtbs+rx]
-				if p.Type[c] == 0 {
-					continue
-				}
-				ps.saoCTB(pl, src, c, p, rx, ry, ctbW, ctbH, subW, subH, bitDepth, anyNoFilter, pps)
+		// the copy of the deblocked plane is scratch: a decoder runs one picture after another,
+		// so the buffer is kept between them instead of allocated and cleared for each
+		if pl.Pix8 != nil {
+			bp := saoScratch8.Get().(*[]uint8)
+			src := append((*bp)[:0], pl.Pix8...) // recPicture: the deblocked samples
+			saoPlane(ps, pl, pl.Pix8, src, c, sps, pps, bitDepth, anyNoFilter)
+			*bp = src
+			saoScratch8.Put(bp)
+			continue
+		}
+		bp := saoScratch16.Get().(*[]uint16)
+		src := append((*bp)[:0], pl.Pix16...)
+		saoPlane(ps, pl, pl.Pix16, src, c, sps, pps, bitDepth, anyNoFilter)
+		*bp = src
+		saoScratch16.Put(bp)
+	}
+}
+
+// saoPlane runs the coding tree blocks of one plane.
+func saoPlane[T pixel](ps *PictureState, pl *Plane, pix, src []T, c int, sps SPS, pps PPS, bitDepth int, anyNoFilter bool) {
+	l := ps.Layout
+	subW, subH := int(sps.CodedWidth)/pl.Width, int(sps.CodedHeight)/pl.Height
+	ctbW, ctbH := (1<<uint(sps.Log2CtbSize))/subW, (1<<uint(sps.Log2CtbSize))/subH
+	for ry := 0; ry < l.HeightCtbs; ry++ {
+		for rx := 0; rx < l.WidthCtbs; rx++ {
+			p := &ps.Sao[ry*l.WidthCtbs+rx]
+			if p.Type[c] == 0 {
+				continue
 			}
+			saoCTB(ps, pl, pix, src, c, p, rx, ry, ctbW, ctbH, subW, subH, bitDepth, anyNoFilter, pps)
 		}
 	}
 }
@@ -83,7 +101,38 @@ func (ps *PictureState) saoUsable(rsN, rsCur int, pps PPS) bool {
 	return l.TileID[l.RsToTs[rsN]] == l.TileID[l.RsToTs[rsCur]] || pps.LoopFilterAcrossTiles
 }
 
-func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx, ry, ctbW, ctbH, subW, subH, bitDepth int, anyNoFilter bool, pps PPS) {
+// errNotBytes is the refusal of a byte plane whose bit depth is not 8: the byte kernels clip at 255.
+func errNotBytes(bitDepth int) error {
+	return fmt.Errorf("%w: a byte plane of bit depth %d", hevc.ErrRefused, bitDepth)
+}
+
+// saoBandKernel runs the band offset of the block at ( x0, y0 ) through the kernels, over the
+// samples of the plane whatever their type.
+func saoBandKernel[T pixel](pix, src []T, stride, x0, y0, cw, ch, bitDepth, bandPos int, off *[4]int16) error {
+	i := y0*stride + x0
+	if p, ok := any(pix).([]uint16); ok {
+		return hevc.TrySAOBand(p, i, stride, any(src).([]uint16), i, stride, cw, ch, bitDepth, bandPos, off)
+	}
+	if bitDepth != 8 {
+		return errNotBytes(bitDepth)
+	}
+	return hevc.TrySAOBandBytes(any(pix).([]uint8), i, stride, any(src).([]uint8), i, stride, cw, ch, bandPos, off)
+}
+
+// saoEdgeKernel runs the edge offset of the rw x rh block at ( rx0, ry0 ), whose neighbours
+// (one sample around it) all lie in the picture, through the kernels.
+func saoEdgeKernel[T pixel](pix, src []T, stride, rx0, ry0, rw, rh, bitDepth, class int, off *[4]int16) error {
+	i := ry0*stride + rx0
+	if p, ok := any(pix).([]uint16); ok {
+		return hevc.TrySAOEdge(p, i, stride, any(src).([]uint16), i, stride, rw, rh, bitDepth, class, off)
+	}
+	if bitDepth != 8 {
+		return errNotBytes(bitDepth)
+	}
+	return hevc.TrySAOEdgeBytes(any(pix).([]uint8), i, stride, any(src).([]uint8), i, stride, rw, rh, class, off)
+}
+
+func saoCTB[T pixel](ps *PictureState, pl *Plane, pix, src []T, c int, p *SaoParams, rx, ry, ctbW, ctbH, subW, subH, bitDepth int, anyNoFilter bool, pps PPS) {
 	l := ps.Layout
 	maxVal := 1<<uint(bitDepth) - 1
 	x0, y0 := rx*ctbW, ry*ctbH
@@ -95,16 +144,16 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 			delta[(k+int(p.BandPos[c]))&31] = int(p.Offset[c][k])
 		}
 		if off, ok := saoOffsets(&p.Offset[c]); ok && !anyNoFilter &&
-			!kernelRefused("SAOBand", hevc.TrySAOBand(pl.Pix, y0*pl.Stride+x0, pl.Stride, src, y0*pl.Stride+x0, pl.Stride, cw, ch, bitDepth, int(p.BandPos[c]), &off)) {
+			!kernelRefused("SAOBand", saoBandKernel(pix, src, pl.Stride, x0, y0, cw, ch, bitDepth, int(p.BandPos[c]), &off)) {
 			return
 		}
 		shift := uint(bitDepth - 5)
 		for j := 0; j < ch; j++ {
 			row := src[(y0+j)*pl.Stride+x0 : (y0+j)*pl.Stride+x0+cw]
-			out := pl.Pix[(y0+j)*pl.Stride+x0 : (y0+j)*pl.Stride+x0+cw]
+			out := pix[(y0+j)*pl.Stride+x0 : (y0+j)*pl.Stride+x0+cw]
 			for i, cur := range row {
 				if d := delta[int(cur)>>shift]; d != 0 && !skip(x0+i, y0+j) {
-					out[i] = uint16(clip3(0, maxVal, int(cur)+d))
+					out[i] = T(clip3(0, maxVal, int(cur)+d))
 				}
 			}
 		}
@@ -137,8 +186,7 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 		if saoWholeBlockHook != nil {
 			saoWholeBlockHook()
 		}
-		i := y0*pl.Stride + x0
-		if !kernelRefused("SAOEdge", hevc.TrySAOEdge(pl.Pix, i, pl.Stride, src, i, pl.Stride, cw, ch, bitDepth, int(class), &off)) {
+		if !kernelRefused("SAOEdge", saoEdgeKernel(pix, src, pl.Stride, x0, y0, cw, ch, bitDepth, int(class), &off)) {
 			return
 		}
 	}
@@ -146,8 +194,7 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 	// (bit depth up to 12, no sample that must stay as it is); the border below stays in Go.
 	kernelDone := false
 	if off, ok := saoOffsets(&p.Offset[c]); ok && !anyNoFilter && cw >= 3 && ch >= 3 {
-		i := (y0+1)*pl.Stride + x0 + 1
-		kernelDone = !kernelRefused("SAOEdge", hevc.TrySAOEdge(pl.Pix, i, pl.Stride, src, i, pl.Stride, cw-2, ch-2, bitDepth, int(class), &off))
+		kernelDone = !kernelRefused("SAOEdge", saoEdgeKernel(pix, src, pl.Stride, x0+1, y0+1, cw-2, ch-2, bitDepth, int(class), &off))
 	}
 	// edge is the sample ( x, y ) with its neighbours checked one by one.
 	edge := func(x, y int) {
@@ -175,7 +222,7 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 			nb[k] = int(src[yn*pl.Stride+xn])
 		}
 		if d := delta[2+sign(cur-nb[0])+sign(cur-nb[1])]; d != 0 {
-			pl.Pix[y*pl.Stride+x] = uint16(clip3(0, maxVal, cur+d))
+			pix[y*pl.Stride+x] = T(clip3(0, maxVal, cur+d))
 		}
 	}
 	for j := 0; j < ch; j++ {
@@ -215,7 +262,7 @@ func (ps *PictureState) saoCTB(pl *Plane, src []uint16, c int, p *SaoParams, rx,
 				e--
 			}
 			if d := delta[e]; d != 0 && !skip(x0+i, y) {
-				pl.Pix[base+i] = uint16(clip3(0, maxVal, cur+d))
+				pix[base+i] = T(clip3(0, maxVal, cur+d))
 			}
 		}
 	}

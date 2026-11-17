@@ -43,7 +43,7 @@ var chromaTaps = [8][]int32{
 func interpolate(pl *Plane, xInt, yInt, xFrac, yFrac, w, h, bitDepth, before int, taps [][]int32, out []int32) {
 	shift1, shift3 := min(4, bitDepth-8), max(2, 14-bitDepth)
 	at := func(x, y int) int32 {
-		return int32(pl.Pix[clip3(0, pl.Height-1, y)*pl.Stride+clip3(0, pl.Width-1, x)])
+		return int32(pl.get(clip3(0, pl.Height-1, y)*pl.Stride + clip3(0, pl.Width-1, x)))
 	}
 	switch {
 	case xFrac == 0 && yFrac == 0:
@@ -108,16 +108,25 @@ type explicitWeights struct {
 // weighted is the weighted sample prediction process (8.5.3.3.4): from the
 // intermediate samples p[ X ] of the lists predFlag says are used it writes the w x h
 // block at ( x0, y0 ) of pl. ew is nil for the default process (8.5.3.3.4.2).
-func weighted(pl *Plane, x0, y0, w, h int, p [2][]int32, predFlag [2]bool, bitDepth int, ew *explicitWeights) {
-	maxVal := int32(1)<<uint(bitDepth) - 1
-	shift1 := uint(max(2, 14-bitDepth))
+func weighted(sc *interpScratch, pl *Plane, x0, y0, w, h int, p [2][]int32, predFlag [2]bool, bitDepth int, ew *explicitWeights) {
 	bi := predFlag[0] && predFlag[1]
 	l := bit(predFlag[1]) // the list of a uni-predicted block
-	if weightedKernel(pl, x0, y0, w, h, p, bi, l, bitDepth, ew) {
+	if weightedKernel(sc, pl, x0, y0, w, h, p, bi, l, bitDepth, ew) {
 		return
 	}
+	if pl.Pix8 != nil {
+		weightedGo(pl.Pix8, y0*pl.Stride+x0, pl.Stride, w, h, p, bi, l, bitDepth, ew)
+	} else {
+		weightedGo(pl.Pix16, y0*pl.Stride+x0, pl.Stride, w, h, p, bi, l, bitDepth, ew)
+	}
+}
+
+// weightedGo is the loops of weighted, for a plane of either sample type.
+func weightedGo[T pixel](pix []T, base, stride, w, h int, p [2][]int32, bi bool, l int, bitDepth int, ew *explicitWeights) {
+	maxVal := int32(1)<<uint(bitDepth) - 1
+	shift1 := uint(max(2, 14-bitDepth))
 	for y := 0; y < h; y++ {
-		o := pl.Pix[(y0+y)*pl.Stride+x0 : (y0+y)*pl.Stride+x0+w]
+		o := pix[base+y*stride : base+y*stride+w]
 		var a, b []int32
 		if bi {
 			a, b = p[0][y*w:y*w+w], p[1][y*w:y*w+w]
@@ -128,21 +137,21 @@ func weighted(pl *Plane, x0, y0, w, h int, p [2][]int32, predFlag [2]bool, bitDe
 		case ew == nil && bi:
 			shift2 := shift1 + 1
 			for x := range o {
-				o[x] = uint16(min(max((a[x]+b[x]+1<<(shift2-1))>>shift2, 0), maxVal)) // (8-264)
+				o[x] = T(min(max((a[x]+b[x]+1<<(shift2-1))>>shift2, 0), maxVal)) // (8-264)
 			}
 		case ew == nil:
 			for x := range o {
-				o[x] = uint16(min(max((a[x]+1<<(shift1-1))>>shift1, 0), maxVal)) // (8-262), (8-263)
+				o[x] = T(min(max((a[x]+1<<(shift1-1))>>shift1, 0), maxVal)) // (8-262), (8-263)
 			}
 		case bi:
 			w0, w1, off, sh := ew.w[0], ew.w[1], (ew.o[0]+ew.o[1]+1)<<uint(ew.log2Wd), uint(ew.log2Wd+1)
 			for x := range o {
-				o[x] = uint16(min(max((a[x]*w0+b[x]*w1+off)>>sh, 0), maxVal)) // (8-277)
+				o[x] = T(min(max((a[x]*w0+b[x]*w1+off)>>sh, 0), maxVal)) // (8-277)
 			}
 		default:
 			wl, ol, rnd, sh := ew.w[l], ew.o[l], int32(1)<<uint(ew.log2Wd-1), uint(ew.log2Wd)
 			for x := range o {
-				o[x] = uint16(min(max(((a[x]*wl+rnd)>>sh)+ol, 0), maxVal)) // (8-275), (8-276)
+				o[x] = T(min(max(((a[x]*wl+rnd)>>sh)+ol, 0), maxVal)) // (8-275), (8-276)
 			}
 		}
 	}
@@ -153,19 +162,36 @@ func weighted(pl *Plane, x0, y0, w, h int, p [2][]int32, predFlag [2]bool, bitDe
 // 8-275 to 8-277 with those values). It reports false when the kernels refuse the block
 // (a width they do not take, a weight outside their bounds), and the loops of weighted
 // then compute it.
-func weightedKernel(pl *Plane, x0, y0, w, h int, p [2][]int32, bi bool, l int, bitDepth int, ew *explicitWeights) bool {
+func weightedKernel(sc *interpScratch, pl *Plane, x0, y0, w, h int, p [2][]int32, bi bool, l int, bitDepth int, ew *explicitWeights) bool {
 	log2Wd, w0, w1, o0, o1 := max(2, 14-bitDepth), int32(1), int32(1), int32(0), int32(0)
 	if ew != nil {
 		log2Wd, w0, w1, o0, o1 = ew.log2Wd, ew.w[0], ew.w[1], ew.o[0], ew.o[1]
 	}
-	off := y0*pl.Stride + x0
+	off, stride := y0*pl.Stride+x0, pl.Stride
+	var err error
+	name := "WeightUni"
 	if bi {
-		return !kernelRefused("WeightBi", hevc.TryWeightBi(pl.Pix, off, pl.Stride, p[0], p[1], 0, w, w, h, bitDepth, log2Wd, w0, w1, o0, o1))
+		name = "WeightBi"
 	}
-	if l == 1 {
-		w0, o0 = w1, o1
+	switch {
+	case pl.Pix8 != nil && bitDepth != 8:
+		return false // the byte kernels clip at 255
+	case pl.Pix8 != nil && bi:
+		err = hevc.TryWeightBiBytes(pl.Pix8, off, stride, p[0], p[1], 0, w, w, h, log2Wd, w0, w1, o0, o1)
+	case pl.Pix8 != nil:
+		if l == 1 {
+			w0, o0 = w1, o1
+		}
+		err = hevc.TryWeightUniBytes(pl.Pix8, off, stride, p[l], 0, w, w, h, log2Wd, w0, o0)
+	case bi:
+		err = hevc.TryWeightBi(pl.Pix16, off, stride, p[0], p[1], 0, w, w, h, bitDepth, log2Wd, w0, w1, o0, o1)
+	default:
+		if l == 1 {
+			w0, o0 = w1, o1
+		}
+		err = hevc.TryWeightUni(pl.Pix16, off, stride, p[l], 0, w, w, h, bitDepth, log2Wd, w0, o0)
 	}
-	return !kernelRefused("WeightUni", hevc.TryWeightUni(pl.Pix, off, pl.Stride, p[l], 0, w, w, h, bitDepth, log2Wd, w0, o0))
+	return !kernelRefused(name, err)
 }
 
 // fullPel is a block of a reference plane at a full-sample position inside the plane.
@@ -179,15 +205,27 @@ type fullPel struct {
 // positions, (A0 + A1 + 1) >> 1: (8-264) with the intermediates A << shift3 of 8.5.3.3.3.2,
 // where shift2 is shift3 + 1.
 func average(dst *Plane, x0, y0, w, h int, a, b fullPel) {
-	if !kernelRefused("Average", hevc.TryAverage(dst.Pix, y0*dst.Stride+x0, dst.Stride, a.ref.Pix, a.yi*a.ref.Stride+a.xi, a.ref.Stride, b.ref.Pix, b.yi*b.ref.Stride+b.xi, b.ref.Stride, w, h)) {
+	if dst.Pix8 != nil {
+		if !kernelRefused("AverageBytes", hevc.TryAverageBytes(dst.Pix8, y0*dst.Stride+x0, dst.Stride, a.ref.Pix8, a.yi*a.ref.Stride+a.xi, a.ref.Stride, b.ref.Pix8, b.yi*b.ref.Stride+b.xi, b.ref.Stride, w, h)) {
+			return
+		}
+		averageGo(dst.Pix8, y0*dst.Stride+x0, dst.Stride, a.ref.Pix8, a.yi*a.ref.Stride+a.xi, a.ref.Stride, b.ref.Pix8, b.yi*b.ref.Stride+b.xi, b.ref.Stride, w, h)
 		return
 	}
+	if !kernelRefused("Average", hevc.TryAverage(dst.Pix16, y0*dst.Stride+x0, dst.Stride, a.ref.Pix16, a.yi*a.ref.Stride+a.xi, a.ref.Stride, b.ref.Pix16, b.yi*b.ref.Stride+b.xi, b.ref.Stride, w, h)) {
+		return
+	}
+	averageGo(dst.Pix16, y0*dst.Stride+x0, dst.Stride, a.ref.Pix16, a.yi*a.ref.Stride+a.xi, a.ref.Stride, b.ref.Pix16, b.yi*b.ref.Stride+b.xi, b.ref.Stride, w, h)
+}
+
+// averageGo is (a + b + 1) >> 1 of the w x h blocks at index ai of pa and bi of pb, written at
+// index di of dst.
+func averageGo[T pixel](dst []T, di, ds int, pa []T, ai, as int, pb []T, bi, bs int, w, h int) {
 	for y := 0; y < h; y++ {
-		ra := a.ref.Pix[(a.yi+y)*a.ref.Stride+a.xi : (a.yi+y)*a.ref.Stride+a.xi+w]
-		rb := b.ref.Pix[(b.yi+y)*b.ref.Stride+b.xi : (b.yi+y)*b.ref.Stride+b.xi+w]
-		o := dst.Pix[(y0+y)*dst.Stride+x0 : (y0+y)*dst.Stride+x0+w]
+		ra, rb := pa[ai+y*as:ai+y*as+w], pb[bi+y*bs:bi+y*bs+w]
+		o := dst[di+y*ds : di+y*ds+w]
 		for x := range o {
-			o[x] = uint16((uint32(ra[x]) + uint32(rb[x]) + 1) >> 1)
+			o[x] = T((uint32(ra[x]) + uint32(rb[x]) + 1) >> 1)
 		}
 	}
 }
@@ -253,8 +291,8 @@ func (r *Reconstructor) predictInter(cu *CodingUnit) error {
 					return fmt.Errorf("h265: reference %d of list %d is not a decoded picture", pu.Motion.RefIdx[l], l)
 				}
 				ref := &e.Pic.Frame.Planes[c]
-				if ref.Width != dst.Width || ref.Height != dst.Height {
-					return fmt.Errorf("h265: a reference picture of %dx%d for a picture of %dx%d", ref.Width, ref.Height, dst.Width, dst.Height)
+				if ref.Width != dst.Width || ref.Height != dst.Height || ref.Is8() != dst.Is8() {
+					return fmt.Errorf("h265: a reference picture of %dx%d (bytes %v) for a picture of %dx%d (bytes %v)", ref.Width, ref.Height, ref.Is8(), dst.Width, dst.Height, dst.Is8())
 				}
 				pred[l] = r.sc.pred[l][:w*h]
 				mv := pu.Motion.MV[l]
@@ -269,7 +307,11 @@ func (r *Reconstructor) predictInter(cu *CodingUnit) error {
 				if pu.Motion.Pred[0] != pu.Motion.Pred[1] && sl.Weights == nil && xf == 0 && yf == 0 &&
 					xi >= 0 && yi >= 0 && xi+w <= ref.Width && yi+h <= ref.Height {
 					for y := 0; y < h; y++ {
-						copy(dst.Pix[(y0+y)*dst.Stride+x0:(y0+y)*dst.Stride+x0+w], ref.Pix[(yi+y)*ref.Stride+xi:(yi+y)*ref.Stride+xi+w])
+						if dst.Pix8 != nil {
+							copy(dst.Pix8[(y0+y)*dst.Stride+x0:(y0+y)*dst.Stride+x0+w], ref.Pix8[(yi+y)*ref.Stride+xi:(yi+y)*ref.Stride+xi+w])
+						} else {
+							copy(dst.Pix16[(y0+y)*dst.Stride+x0:(y0+y)*dst.Stride+x0+w], ref.Pix16[(yi+y)*ref.Stride+xi:(yi+y)*ref.Stride+xi+w])
+						}
 					}
 					copied = true
 					continue
@@ -311,7 +353,7 @@ func (r *Reconstructor) predictInter(cu *CodingUnit) error {
 			if sl.Weights != nil {
 				ew = explicitFor(sl.Weights, r.sps, &pu.Motion, c)
 			}
-			weighted(dst, x0, y0, w, h, pred, pu.Motion.Pred, bitDepth, ew)
+			weighted(&r.sc, dst, x0, y0, w, h, pred, pu.Motion.Pred, bitDepth, ew)
 		}
 	}
 	return nil

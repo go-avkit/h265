@@ -275,9 +275,7 @@ func (d *DPB) Begin(in PictureInfo) (RefPics, error) {
 func (d *DPB) generate(in PictureInfo, poc int32, mark RefMark) *DPBPicture {
 	frame := NewDecodedPicture(in.SPS)
 	for c := 0; c < frame.Components; c++ {
-		for i := range frame.Planes[c].Pix {
-			frame.Planes[c].Pix[i] = 1 << uint(frame.BitDepth[c]-1)
-		}
+		frame.Planes[c].fill(1 << uint(frame.BitDepth[c]-1))
 	}
 	p := &DPBPicture{POC: poc, Frame: frame, SPS: in.SPS, Mark: mark, Generated: true, TemporalID: in.TemporalID}
 	d.pics = append(d.pics, p)
@@ -321,11 +319,13 @@ func (p *DecodedPicture) Clone() *DecodedPicture {
 	out := &DecodedPicture{Components: p.Components, BitDepth: p.BitDepth}
 	for c := 0; c < p.Components; c++ {
 		pl := &p.Planes[c]
-		pix := make([]uint16, pl.Width*pl.Height)
-		for y := 0; y < pl.Height; y++ {
-			copy(pix[y*pl.Width:(y+1)*pl.Width], pl.Pix[y*pl.Stride:y*pl.Stride+pl.Width])
+		if pl.Pix8 != nil {
+			out.Planes[c] = newPlane(pl.Width, pl.Height, 8)
+			copyBlock(out.Planes[c].Pix8, 0, pl.Width, pl.Pix8, 0, pl.Stride, pl.Width, pl.Height)
+		} else {
+			out.Planes[c] = newPlane(pl.Width, pl.Height, 16)
+			copyBlock(out.Planes[c].Pix16, 0, pl.Width, pl.Pix16, 0, pl.Stride, pl.Width, pl.Height)
 		}
-		out.Planes[c] = Plane{Width: pl.Width, Height: pl.Height, Stride: pl.Width, Pix: pix}
 	}
 	return out
 }
@@ -345,9 +345,7 @@ func (p *DecodedPicture) Crop(sps SPS) *DecodedPicture {
 		} else {
 			x0, y0 = int(subW)*x0, int(subH)*y0
 		}
-		first := y0*pl.Stride + x0
-		end := first + (h-1)*pl.Stride + w
-		out.Planes[c] = Plane{Width: w, Height: h, Stride: pl.Stride, Pix: pl.Pix[first:end:end]}
+		out.Planes[c] = pl.window(y0*pl.Stride+x0, w, h)
 	}
 	return out
 }

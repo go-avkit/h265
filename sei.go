@@ -124,20 +124,6 @@ func ParsePictureHash(payload []byte, chromaFormatIdc int) (h PictureHash, ok bo
 	return h, true, nil
 }
 
-// Plane is one colour component of a decoded picture: Width x Height samples, rows Stride
-// samples apart (Stride is at least Width; sample (x, y) is Pix[y*Stride+x]).
-type Plane struct {
-	Width, Height, Stride int
-	Pix                   []uint16
-}
-
-// DecodedPicture is a decoded picture: Components planes, each with its bit depth.
-type DecodedPicture struct {
-	Components int
-	BitDepth   [3]int
-	Planes     [3]Plane
-}
-
 // crcTable is the byte-wise form of the CRC of D-24 (poly 0x1021, no reflection).
 var crcTable = func() (t [256]uint16) {
 	for i := range t {
@@ -163,48 +149,73 @@ func (p *DecodedPicture) Hash(kind uint8) PictureHash {
 		switch kind {
 		case HashMD5:
 			m := md5.New()
-			row := make([]byte, 0, 2*pl.Width)
-			for y := 0; y < pl.Height; y++ {
-				row = row[:0]
-				for _, v := range pl.Pix[y*pl.Stride : y*pl.Stride+pl.Width] {
-					row = append(row, byte(v))
-					if deep {
-						row = append(row, byte(v>>8))
-					}
+			if pl.Pix8 != nil { // the rows are the bytes the hash takes
+				for y := 0; y < pl.Height; y++ {
+					m.Write(pl.Pix8[y*pl.Stride : y*pl.Stride+pl.Width])
 				}
-				m.Write(row)
+			} else {
+				row := make([]byte, 0, 2*pl.Width)
+				for y := 0; y < pl.Height; y++ {
+					row = row[:0]
+					for _, v := range pl.Pix16[y*pl.Stride : y*pl.Stride+pl.Width] {
+						row = append(row, byte(v))
+						if deep {
+							row = append(row, byte(v>>8))
+						}
+					}
+					m.Write(row)
+				}
 			}
 			m.Sum(h.MD5[c][:0])
 		case HashCRC:
 			// D-24 shifts the data through the register and then two zero bytes. That
 			// is the table-driven CRC with the initial value 0xFFFF moved ahead of
 			// those two bytes: 0x1D0F.
-			crc := uint16(0x1D0F)
-			step := func(b byte) { crc = crc<<8 ^ crcTable[byte(crc>>8)^b] }
-			for y := 0; y < pl.Height; y++ {
-				for _, v := range pl.Pix[y*pl.Stride : y*pl.Stride+pl.Width] {
-					step(byte(v))
-					if deep {
-						step(byte(v >> 8))
-					}
-				}
+			if pl.Pix8 != nil {
+				h.CRC[c] = crcPlane(pl.Pix8, pl, deep)
+			} else {
+				h.CRC[c] = crcPlane(pl.Pix16, pl, deep)
 			}
-			h.CRC[c] = crc
 		default:
-			var sum uint32
-			for y := 0; y < pl.Height; y++ {
-				for x, v := range pl.Pix[y*pl.Stride : y*pl.Stride+pl.Width] {
-					mask := uint32((x & 0xFF) ^ (y & 0xFF) ^ (x >> 8) ^ (y >> 8))
-					sum += uint32(v&0xFF) ^ mask
-					if deep {
-						sum += uint32(v>>8) ^ mask
-					}
-				}
+			if pl.Pix8 != nil {
+				h.Checksum[c] = checksumPlane(pl.Pix8, pl, deep)
+			} else {
+				h.Checksum[c] = checksumPlane(pl.Pix16, pl, deep)
 			}
-			h.Checksum[c] = sum
 		}
 	}
 	return h
+}
+
+// crcPlane is the CRC of D-24 over the samples of a plane, a byte a sample, or two (low byte
+// first) when deep.
+func crcPlane[T pixel](pix []T, pl *Plane, deep bool) uint16 {
+	crc := uint16(0x1D0F)
+	step := func(b byte) { crc = crc<<8 ^ crcTable[byte(crc>>8)^b] }
+	for y := 0; y < pl.Height; y++ {
+		for _, v := range pix[y*pl.Stride : y*pl.Stride+pl.Width] {
+			step(byte(v))
+			if deep {
+				step(byte(uint16(v) >> 8))
+			}
+		}
+	}
+	return crc
+}
+
+// checksumPlane is the checksum of D.3.20 over the samples of a plane.
+func checksumPlane[T pixel](pix []T, pl *Plane, deep bool) uint32 {
+	var sum uint32
+	for y := 0; y < pl.Height; y++ {
+		for x, v := range pix[y*pl.Stride : y*pl.Stride+pl.Width] {
+			mask := uint32((x & 0xFF) ^ (y & 0xFF) ^ (x >> 8) ^ (y >> 8))
+			sum += uint32(v&0xFF) ^ mask
+			if deep {
+				sum += uint32(uint16(v)>>8) ^ mask
+			}
+		}
+	}
+	return sum
 }
 
 // Verify reports the first component of p whose hash is not the stated one.

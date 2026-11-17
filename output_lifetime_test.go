@@ -67,7 +67,7 @@ func TestAnOutputPictureIsUnchangedWhileTheRestOfTheStreamDecodes(t *testing.T) 
 			// two pictures never share memory: each is its own allocation
 			for i := range kept {
 				for j := i + 1; j < len(kept); j++ {
-					if &kept[i].Planes[0].Pix[0] == &kept[j].Planes[0].Pix[0] {
+					if samePlace(&kept[i].Planes[0], 0, &kept[j].Planes[0], 0) {
 						t.Fatalf("pictures %d and %d are the same memory", i, j)
 					}
 				}
@@ -79,18 +79,26 @@ func TestAnOutputPictureIsUnchangedWhileTheRestOfTheStreamDecodes(t *testing.T) 
 // TestCropIsAViewOfThePicture: no sample is copied, the stride is the picture's, and the
 // view cannot grow into what follows it.
 func TestCropIsAViewOfThePicture(t *testing.T) {
-	sps := mustSPS(t, set{chroma: 1, width: 32, height: 16, window: [4]uint32{1, 2, 1, 0}})
-	f := NewDecodedPicture(sps)
-	got := f.Crop(sps)
-	for c, first := range []int{2*32 + 2, 1*16 + 1} {
-		if &got.Planes[c].Pix[0] != &f.Planes[c].Pix[first] {
-			t.Errorf("plane %d is a copy", c)
-		}
-		if got.Planes[c].Stride != f.Planes[c].Stride {
-			t.Errorf("plane %d stride %d, the picture's is %d", c, got.Planes[c].Stride, f.Planes[c].Stride)
-		}
-		if pl := got.Planes[c]; len(pl.Pix) != (pl.Height-1)*pl.Stride+pl.Width || cap(pl.Pix) != len(pl.Pix) {
-			t.Errorf("plane %d: %d samples, capacity %d", c, len(pl.Pix), cap(pl.Pix))
+	for _, depth := range []int{8, 10} { // byte planes and 16-bit planes
+		sps := mustSPS(t, set{chroma: 1, width: 32, height: 16, window: [4]uint32{1, 2, 1, 0}})
+		sps.BitDepthLuma, sps.BitDepthChroma = uint8(depth), uint8(depth)
+		f := NewDecodedPicture(sps)
+		got := f.Crop(sps)
+		for c, first := range []int{2*32 + 2, 1*16 + 1} {
+			if !samePlace(&got.Planes[c], 0, &f.Planes[c], first) {
+				t.Errorf("depth %d plane %d is a copy", depth, c)
+			}
+			if got.Planes[c].Stride != f.Planes[c].Stride {
+				t.Errorf("depth %d plane %d stride %d, the picture's is %d", depth, c, got.Planes[c].Stride, f.Planes[c].Stride)
+			}
+			pl := got.Planes[c]
+			n, capacity := len(pl.Pix16), cap(pl.Pix16)
+			if depth == 8 {
+				n, capacity = len(pl.Pix8), cap(pl.Pix8)
+			}
+			if n != (pl.Height-1)*pl.Stride+pl.Width || capacity != n || pl.Is8() != (depth == 8) {
+				t.Errorf("depth %d plane %d: %d samples, capacity %d, Is8 %v", depth, c, n, capacity, pl.Is8())
+			}
 		}
 	}
 }
@@ -98,28 +106,32 @@ func TestCropIsAViewOfThePicture(t *testing.T) {
 // TestCloneIsAnOwnedWritableCopy: the copy equals the picture, is contiguous, and writing to it
 // leaves the decoder's picture (and so the later pictures predicted from it) untouched.
 func TestCloneIsAnOwnedWritableCopy(t *testing.T) {
-	sps := mustSPS(t, set{chroma: 1, width: 32, height: 16, window: [4]uint32{1, 2, 1, 0}})
-	f := NewDecodedPicture(sps)
-	for c := 0; c < 3; c++ {
-		for i := range f.Planes[c].Pix {
-			f.Planes[c].Pix[i] = uint16(i % 251)
+	for _, depth := range []int{8, 10} {
+		sps := mustSPS(t, set{chroma: 1, width: 32, height: 16, window: [4]uint32{1, 2, 1, 0}})
+		sps.BitDepthLuma, sps.BitDepthChroma = uint8(depth), uint8(depth)
+		f := NewDecodedPicture(sps)
+		for c := 0; c < 3; c++ {
+			for i := 0; i < f.Planes[c].Len(); i++ {
+				f.Planes[c].set(i, i%251)
+			}
 		}
-	}
-	view := f.Crop(sps)
-	want := pictureMD5(view)
-	cl := view.Clone()
-	if got := pictureMD5(cl); got != want {
-		t.Fatalf("the clone hashes %s, the view %s", got, want)
-	}
-	for c := 0; c < cl.Components; c++ {
-		if pl := cl.Planes[c]; pl.Stride != pl.Width || len(pl.Pix) != pl.Width*pl.Height {
-			t.Errorf("plane %d is not contiguous: stride %d width %d length %d", c, pl.Stride, pl.Width, len(pl.Pix))
+		view := f.Crop(sps)
+		want := pictureMD5(view)
+		cl := view.Clone()
+		if got := pictureMD5(cl); got != want {
+			t.Fatalf("depth %d: the clone hashes %s, the view %s", depth, got, want)
 		}
-		for i := range cl.Planes[c].Pix {
-			cl.Planes[c].Pix[i] ^= 0xffff
+		for c := 0; c < cl.Components; c++ {
+			pl := &cl.Planes[c]
+			if pl.Stride != pl.Width || pl.Len() != pl.Width*pl.Height || pl.Is8() != (depth == 8) {
+				t.Errorf("depth %d plane %d is not contiguous or not of its kind: stride %d width %d length %d", depth, c, pl.Stride, pl.Width, pl.Len())
+			}
+			for i := 0; i < pl.Len(); i++ {
+				pl.set(i, pl.get(i)^0xff)
+			}
 		}
-	}
-	if got := pictureMD5(view); got != want {
-		t.Errorf("writing to the clone changed the picture: %s, was %s", got, want)
+		if got := pictureMD5(view); got != want {
+			t.Errorf("depth %d: writing to the clone changed the picture: %s, was %s", depth, got, want)
+		}
 	}
 }

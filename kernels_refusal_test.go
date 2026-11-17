@@ -6,9 +6,12 @@ package h265
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/go-videodsp/kernels/hevc"
 )
 
 // countRefusals runs f with the refusal hook counting, by entry point.
@@ -106,26 +109,82 @@ func TestTheRefusalHookCountsEachEntryPointItNames(t *testing.T) {
 // bands must give what the Go loops give.
 func TestAHorizontalPassOver71RowsRunsInBands(t *testing.T) {
 	const w, h = 64, 64
-	pl := &Plane{Width: 160, Height: 160, Stride: 160, Pix: make([]uint16, 160*160)}
-	for i := range pl.Pix {
-		pl.Pix[i] = uint16(i*7919>>3) & 255
+	for _, bytes := range []bool{false, true} { // a plane of 16-bit samples, and of bytes
+		pl := &Plane{Width: 160, Height: 160, Stride: 160, Pix16: make([]uint16, 160*160)}
+		if bytes {
+			pl = &Plane{Width: 160, Height: 160, Stride: 160, Pix8: make([]uint8, 160*160)}
+		}
+		for i := 0; i < 160*160; i++ {
+			pl.set(i, int(uint16(i*7919>>3)&255))
+		}
+		var sc interpScratch
+		got, want := make([]int32, w*h), make([]int32, w*h)
+		refusals := countRefusals(t, func() {
+			interpolateFast(&sc, pl, 40, 40, 1, 3, w, h, 8, 3, lumaTaps[:], got)
+		})
+		if len(refusals) != 0 {
+			t.Errorf("bytes %v: refused: %v", bytes, refusals)
+		}
+		src, ss := px(pl)[(40-3)*pl.Stride+40-3:], pl.Stride
+		mid := make([]int16, (h+7)*w)
+		hpass(src, ss, h+7, w, lumaTaps[1], 0, mid)
+		vpass(mid, w, w, h, lumaTaps[3], 6, want)
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("bytes %v: sample %d: %d, the Go loops give %d", bytes, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+// The same for a plane of bytes: the Go loop computes the block the kernel refuses.
+func TestAverageOfBytesFallsBackToTheGoLoopWhenTheKernelRefuses(t *testing.T) {
+	mk := func(seed uint8) *Plane {
+		pl := &Plane{Width: 8, Height: 4, Stride: 8, Pix8: make([]uint8, 32)}
+		for i := range pl.Pix8 {
+			pl.Pix8[i] = seed + uint8(i)*37
+		}
+		return pl
+	}
+	ra, rb, dst := mk(1), mk(200), mk(0)
+	refusals := countRefusals(t, func() {
+		average(dst, 1, 1, 3, 2, fullPel{ref: ra, xi: 2, yi: 1}, fullPel{ref: rb, xi: 4, yi: 2})
+	})
+	if refusals["AverageBytes"] != 1 {
+		t.Errorf("refusals %v", refusals)
+	}
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 3; x++ {
+			want := uint8((int(ra.Pix8[(1+y)*8+2+x]) + int(rb.Pix8[(2+y)*8+4+x]) + 1) >> 1)
+			if got := dst.Pix8[(1+y)*8+1+x]; got != want {
+				t.Errorf("(%d,%d): %d, want %d", x, y, got, want)
+			}
+		}
+	}
+}
+
+// A byte plane of a bit depth other than 8 does not go to the byte kernels, which clip at 255: the
+// weighting runs in Go (no refusal counted), and the SAO kernels refuse the block.
+func TestByteKernelsLeaveOtherBitDepthsToGo(t *testing.T) {
+	pl := &Plane{Width: 8, Height: 4, Stride: 8, Pix8: make([]uint8, 32)}
+	p := [2][]int32{make([]int32, 32), make([]int32, 32)}
+	for i := range p[0] {
+		p[0][i] = int32(i) << 6
 	}
 	var sc interpScratch
-	got, want := make([]int32, w*h), make([]int32, w*h)
 	refusals := countRefusals(t, func() {
-		interpolateFast(&sc, pl, 40, 40, 1, 3, w, h, 8, 3, lumaTaps[:], got)
+		weighted(&sc, pl, 0, 0, 8, 4, p, [2]bool{true, false}, 7, nil)
 	})
 	if len(refusals) != 0 {
-		t.Errorf("refused: %v", refusals)
+		t.Errorf("refusals %v", refusals)
 	}
-	src, ss := pl.Pix[(40-3)*pl.Stride+40-3:], pl.Stride
-	mid := make([]int16, (h+7)*w)
-	hpass(src, ss, h+7, w, lumaTaps[1], 0, mid)
-	vpass(mid, w, w, h, lumaTaps[3], 6, want)
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("sample %d: %d, the Go loops give %d", i, got[i], want[i])
-		}
+	var off [4]int16
+	src := make([]uint8, 100)
+	if err := saoBandKernel(pl.Pix8, src, 8, 0, 0, 8, 4, 7, 0, &off); !errors.Is(err, hevc.ErrRefused) {
+		t.Errorf("band: %v", err)
+	}
+	if err := saoEdgeKernel(pl.Pix8, src, 8, 1, 1, 4, 2, 7, 0, &off); !errors.Is(err, hevc.ErrRefused) {
+		t.Errorf("edge: %v", err)
 	}
 }
 
@@ -133,9 +192,9 @@ func TestAHorizontalPassOver71RowsRunsInBands(t *testing.T) {
 // take, so the loop computes it, and the refusal is counted under Average.
 func TestAverageFallsBackToTheGoLoopWhenTheKernelRefuses(t *testing.T) {
 	mk := func(seed uint16) *Plane {
-		pl := &Plane{Width: 8, Height: 4, Stride: 8, Pix: make([]uint16, 32)}
-		for i := range pl.Pix {
-			pl.Pix[i] = seed + uint16(i)*3001
+		pl := &Plane{Width: 8, Height: 4, Stride: 8, Pix16: make([]uint16, 32)}
+		for i := range pl.Pix16 {
+			pl.Pix16[i] = seed + uint16(i)*3001
 		}
 		return pl
 	}
@@ -148,8 +207,8 @@ func TestAverageFallsBackToTheGoLoopWhenTheKernelRefuses(t *testing.T) {
 	}
 	for y := 0; y < 2; y++ {
 		for x := 0; x < 3; x++ {
-			want := uint16((uint32(ra.Pix[(1+y)*8+2+x]) + uint32(rb.Pix[(2+y)*8+4+x]) + 1) >> 1)
-			if got := dst.Pix[(1+y)*8+1+x]; got != want {
+			want := uint16((uint32(ra.Pix16[(1+y)*8+2+x]) + uint32(rb.Pix16[(2+y)*8+4+x]) + 1) >> 1)
+			if got := dst.Pix16[(1+y)*8+1+x]; got != want {
 				t.Errorf("(%d,%d): %d, want %d", x, y, got, want)
 			}
 		}

@@ -74,15 +74,15 @@ func modelChroma(B func(i, j int) int, xFrac, yFrac, bd int) int {
 }
 
 func randomPlane(rng *rand.Rand, w, h, bd int) *Plane {
-	pl := &Plane{Width: w, Height: h, Stride: w, Pix: make([]uint16, w*h)}
-	for i := range pl.Pix {
-		pl.Pix[i] = uint16(rng.IntN(1 << uint(bd)))
+	pl := newPlane(w, h, bd) // bytes at 8 bits, as the decoder makes them
+	for i := 0; i < pl.Len(); i++ {
+		pl.set(i, rng.IntN(1<<uint(bd)))
 	}
-	return pl
+	return &pl
 }
 
 func clampedAt(pl *Plane, x, y int) int {
-	return int(pl.Pix[min(max(y, 0), pl.Height-1)*pl.Stride+min(max(x, 0), pl.Width-1)])
+	return pl.get(min(max(y, 0), pl.Height-1)*pl.Stride + min(max(x, 0), pl.Width-1))
 }
 
 func TestInterpolationAgainstTheEquations(t *testing.T) {
@@ -162,7 +162,8 @@ func TestWeightedPredictionAgainstTheEquations(t *testing.T) {
 	for iter := 0; iter < 4000; iter++ {
 		bd := 8 + rng.IntN(9)
 		w, h := 1+rng.IntN(6), 1+rng.IntN(6)
-		pl := &Plane{Width: w + 3, Height: h + 2, Stride: w + 3, Pix: make([]uint16, (w+3)*(h+2))}
+		npl := newPlane(w+3, h+2, bd)
+		pl := &npl
 		var p [2][]int32
 		for l := range p {
 			p[l] = make([]int32, w*h)
@@ -181,7 +182,7 @@ func TestWeightedPredictionAgainstTheEquations(t *testing.T) {
 				ew.w[l], ew.o[l] = int32(rng.IntN(256)-128), int32(rng.IntN(1<<uint(min(bd, 12)))-1<<uint(min(bd, 12)-1))
 			}
 		}
-		weighted(pl, 3, 2, w, h, p, flags, bd, ew)
+		weighted(new(interpScratch), pl, 3, 2, w, h, p, flags, bd, ew)
 		kind := 2 // both lists
 		if !flags[1] {
 			kind = 0
@@ -192,7 +193,7 @@ func TestWeightedPredictionAgainstTheEquations(t *testing.T) {
 		for y := 0; y < h; y++ {
 			for x := 0; x < w; x++ {
 				want := modelWeighted(int(p[0][y*w+x]), int(p[1][y*w+x]), flags[0], flags[1], bd, ew)
-				if got := int(pl.Pix[(2+y)*pl.Stride+3+x]); got != want {
+				if got := pl.get((2+y)*pl.Stride + 3 + x); got != want {
 					t.Fatalf("iter %d: bit depth %d flags %v explicit %v: %d, the equations give %d", iter, bd, flags, ew != nil, got, want)
 				}
 			}
@@ -335,7 +336,7 @@ func TestInterPredictionOfACodingUnit(t *testing.T) {
 						}
 						want := modelWeighted(p[0], p[1], pu.Motion.Pred[0], pu.Motion.Pred[1], bd, ew)
 						pl := &frame.Planes[c]
-						if got := int(pl.Pix[(pu.Y/sh+y)*pl.Stride+pu.X/sw+x]); got != want {
+						if got := pl.get((pu.Y/sh+y)*pl.Stride + pu.X/sw + x); got != want {
 							t.Fatalf("iter %d: format %d block %d component %d at (%d,%d): %d, the equations give %d", iter, chromaFormat, i, c, x, y, got, want)
 						}
 					}
@@ -358,10 +359,10 @@ func TestInterResidualIsAddedToThePrediction(t *testing.T) {
 	for iter := 0; iter < 200; iter++ {
 		frame := NewDecodedPicture(sps)
 		pl := &frame.Planes[0]
-		for i := range pl.Pix {
-			pl.Pix[i] = uint16(rng.IntN(256))
+		for i := 0; i < pl.Len(); i++ {
+			pl.set(i, rng.IntN(256))
 		}
-		before := append([]uint16(nil), pl.Pix...)
+		before := append([]uint16(nil), px(pl)...)
 		levels := make([]int32, 64)
 		for i := range levels {
 			levels[i] = int32(rng.IntN(121) - 60)
@@ -398,8 +399,8 @@ func TestInterResidualIsAddedToThePrediction(t *testing.T) {
 				if x >= 8 && x < 16 && y >= 8 && y < 16 {
 					want = min(max(want+int(res[(y-8)*8+x-8]), 0), 255)
 				}
-				if int(pl.Pix[y*32+x]) != want {
-					t.Fatalf("iter %d: sample (%d,%d) is %d, wanted %d", iter, x, y, pl.Pix[y*32+x], want)
+				if pl.get(y*32+x) != want {
+					t.Fatalf("iter %d: sample (%d,%d) is %d, wanted %d", iter, x, y, pl.get(y*32+x), want)
 				}
 			}
 		}
@@ -520,8 +521,8 @@ func TestFastInterpolationAgainstTheReference(t *testing.T) {
 		bd := 8 + rng.IntN(5)
 		pl := randomPlane(rng, 20+rng.IntN(120), 20+rng.IntN(120), bd)
 		if rng.IntN(2) == 0 { // the extremes only
-			for i := range pl.Pix {
-				pl.Pix[i] = uint16(rng.IntN(2)) * uint16(1<<uint(bd)-1)
+			for i := 0; i < pl.Len(); i++ {
+				pl.set(i, rng.IntN(2)*(1<<uint(bd)-1))
 			}
 		}
 		w, h := 1+rng.IntN(64), 1+rng.IntN(64)
