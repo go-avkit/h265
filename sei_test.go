@@ -15,7 +15,7 @@ func refPictureData(p *DecodedPicture, c int) []byte {
 	pl := p.Planes[c]
 	var out []byte
 	for i := 0; i < pl.Width*pl.Height; i++ {
-		v := pl.Pix[(i/pl.Width)*pl.Stride+i%pl.Width]
+		v := pl.At(i%pl.Width, i/pl.Width)
 		out = append(out, byte(v&0xFF))
 		if p.BitDepth[c] > 8 {
 			out = append(out, byte(v>>8))
@@ -44,7 +44,7 @@ func refChecksum(p *DecodedPicture, c int) uint32 {
 	for y := 0; y < pl.Height; y++ {
 		for x := 0; x < pl.Width; x++ {
 			xorMask := uint32((x & 0xFF) ^ (y & 0xFF) ^ (x >> 8) ^ (y >> 8))
-			v := uint32(pl.Pix[y*pl.Stride+x])
+			v := uint32(pl.At(x, y))
 			sum += (v & 0xFF) ^ xorMask
 			if p.BitDepth[c] > 8 {
 				sum += (v >> 8) ^ xorMask
@@ -63,11 +63,15 @@ func randomPicture(rng *rand.Rand) *DecodedPicture {
 		}
 		stride := w + rng.IntN(5)
 		p.BitDepth[c] = 8 + rng.IntN(9)
-		pix := make([]uint16, stride*h)
-		for i := range pix {
-			pix[i] = uint16(rng.IntN(1 << p.BitDepth[c]))
+		p.Planes[c] = Plane{Width: w, Height: h, Stride: stride}
+		if p.BitDepth[c] == 8 { // a byte plane, as the decoder makes it at 8 bits
+			p.Planes[c].Pix8 = make([]uint8, stride*h)
+		} else {
+			p.Planes[c].Pix16 = make([]uint16, stride*h)
 		}
-		p.Planes[c] = Plane{Width: w, Height: h, Stride: stride, Pix: pix}
+		for i := 0; i < p.Planes[c].Len(); i++ {
+			p.Planes[c].set(i, rng.IntN(1<<p.BitDepth[c]))
+		}
 	}
 	return p
 }
@@ -97,11 +101,11 @@ func TestPictureHashAgainstTheSpecificationText(t *testing.T) {
 			c := rng.IntN(p.Components)
 			pl := &p.Planes[c]
 			i := rng.IntN(pl.Height)*pl.Stride + rng.IntN(pl.Width)
-			pl.Pix[i] ^= 1
+			pl.set(i, pl.get(i)^1)
 			if h.Verify(p) == nil {
 				t.Fatalf("iter %d: a changed sample passed hash type %d", iter, h.Type)
 			}
-			pl.Pix[i] ^= 1
+			pl.set(i, pl.get(i)^1)
 		}
 	}
 	if err := (PictureHash{Components: 3}).Verify(&DecodedPicture{Components: 1}); err == nil {

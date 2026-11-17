@@ -415,8 +415,8 @@ func TestCropToTheConformanceWindow(t *testing.T) {
 	sps := mustSPS(t, set{chroma: 1, width: 32, height: 16, window: [4]uint32{1, 2, 1, 0}})
 	f := NewDecodedPicture(sps)
 	for c := 0; c < 3; c++ {
-		for i := range f.Planes[c].Pix {
-			f.Planes[c].Pix[i] = uint16(i % 251)
+		for i := 0; i < f.Planes[c].Len(); i++ {
+			f.Planes[c].set(i, i%251)
 		}
 	}
 	got := f.Crop(sps)
@@ -424,7 +424,7 @@ func TestCropToTheConformanceWindow(t *testing.T) {
 	if got.Planes[0].Width != 26 || got.Planes[0].Height != 14 || got.Planes[1].Width != 13 || got.Planes[1].Height != 7 {
 		t.Fatalf("sizes %dx%d and %dx%d", got.Planes[0].Width, got.Planes[0].Height, got.Planes[1].Width, got.Planes[1].Height)
 	}
-	if got.Planes[0].Pix[0] != f.Planes[0].Pix[2*32+2] || got.Planes[1].Pix[0] != f.Planes[1].Pix[1*16+1] {
+	if got.Planes[0].At(0, 0) != f.Planes[0].At(2, 2) || got.Planes[1].At(0, 0) != f.Planes[1].At(1, 1) {
 		t.Errorf("the window starts at the wrong sample")
 	}
 }

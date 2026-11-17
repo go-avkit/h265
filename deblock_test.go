@@ -158,7 +158,7 @@ func TestBoundaryStrengthPrecedence(t *testing.T) {
 // refLuma is 8.7.2.5.3, 8.7.2.5.4, 8.7.2.5.6 and 8.7.2.5.7 for one edge segment, with the
 // samples p[ i ][ k ] and q[ i ][ k ] as the text names them.
 func refLuma(pl *Plane, xq, yq int, vertical bool, bS, qpP, qpQ, betaOff, tcOff, bd int, noP, noQ bool) {
-	get := func(i, k int, isP bool) *uint16 {
+	get := func(i, k int, isP bool) int {
 		var x, y int
 		switch {
 		case vertical && isP:
@@ -170,10 +170,10 @@ func refLuma(pl *Plane, xq, yq int, vertical bool, bS, qpP, qpQ, betaOff, tcOff,
 		default:
 			x, y = xq+k, yq+i
 		}
-		return &pl.Pix[y*pl.Stride+x]
+		return y*pl.Stride + x
 	}
-	P := func(i, k int) int { return int(*get(i, k, true)) }
-	Q := func(i, k int) int { return int(*get(i, k, false)) }
+	P := func(i, k int) int { return pl.get(get(i, k, true)) }
+	Q := func(i, k int) int { return pl.get(get(i, k, false)) }
 	qPL := (qpQ + qpP + 1) >> 1
 	Qb := min(max(qPL+(betaOff<<1), 0), 51)
 	beta := betaTable[Qb] * (1 << uint(bd-8))
@@ -244,10 +244,10 @@ func refLuma(pl *Plane, xq, yq int, vertical bool, bS, qpP, qpQ, betaOff, tcOff,
 			nDq = 0
 		}
 		for i := 0; i < nDp; i++ {
-			*get(i, k, true) = uint16(pp[i])
+			pl.set(get(i, k, true), pp[i])
 		}
 		for i := 0; i < nDq; i++ {
-			*get(i, k, false) = uint16(qq[i])
+			pl.set(get(i, k, false), qq[i])
 		}
 	}
 }
@@ -263,15 +263,15 @@ func refChroma(pl *Plane, xq, yq int, vertical bool, tC, bd int, noP, noQ []bool
 			p0x, p0y, p1x, p1y = xq+k, yq-1, xq+k, yq-2
 			q0x, q0y, q1x, q1y = xq+k, yq, xq+k, yq+1
 		}
-		at := func(x, y int) int { return int(pl.Pix[y*pl.Stride+x]) }
+		at := func(x, y int) int { return pl.get(y*pl.Stride + x) }
 		p0, p1, q0, q1 := at(p0x, p0y), at(p1x, p1y), at(q0x, q0y), at(q1x, q1y)
 		delta := min(max((((q0-p0)<<2)+p1-q1+4)>>3, -tC), tC)
 		clip1 := func(v int) int { return min(max(v, 0), 1<<uint(bd)-1) }
 		if !noP[k] {
-			pl.Pix[p0y*pl.Stride+p0x] = uint16(clip1(p0 + delta))
+			pl.set(p0y*pl.Stride+p0x, clip1(p0+delta))
 		}
 		if !noQ[k] {
-			pl.Pix[q0y*pl.Stride+q0x] = uint16(clip1(q0 - delta))
+			pl.set(q0y*pl.Stride+q0x, clip1(q0-delta))
 		}
 	}
 }
@@ -512,21 +512,22 @@ func TestDeblockingAgainstTheSpecificationText(t *testing.T) {
 		}
 		before := make([][]uint16, frame.Components)
 		for c := range before {
-			before[c] = append([]uint16(nil), frame.Planes[c].Pix...)
+			before[c] = append([]uint16(nil), px(&frame.Planes[c])...)
 		}
 		ps.Deblock(frame, ww.sps, ww.pps)
 		refDeblock(ww, ref.frame, plans)
 		for c := 0; c < frame.Components; c++ {
 			total++
-			if !reflect.DeepEqual(frame.Planes[c].Pix, before[c]) {
+			got, want := px(&frame.Planes[c]), px(&ref.frame.Planes[c])
+			if !reflect.DeepEqual(got, before[c]) {
 				changed++
 			}
-			if !reflect.DeepEqual(frame.Planes[c].Pix, ref.frame.Planes[c].Pix) {
+			if !reflect.DeepEqual(got, want) {
 				w := frame.Planes[c].Width
-				for i := range frame.Planes[c].Pix {
-					if frame.Planes[c].Pix[i] != ref.frame.Planes[c].Pix[i] {
+				for i := range got {
+					if got[i] != want[i] {
 						t.Fatalf("iter %d: component %d differs at (%d,%d): %d, the text's %d (chroma format %d, size %dx%d)", iter, c, i%w, i/w,
-							frame.Planes[c].Pix[i], ref.frame.Planes[c].Pix[i], ww.sps.ChromaFormat, ww.sps.CodedWidth, ww.sps.CodedHeight)
+							got[i], want[i], ww.sps.ChromaFormat, ww.sps.CodedWidth, ww.sps.CodedHeight)
 					}
 				}
 			}
@@ -618,7 +619,7 @@ func refSAO(ww *walkWriter, frame *DecodedPicture, plans []segPlan) {
 	zs := func(x, y int) int { return l.MinTbAddrZs(x>>uint(s.Log2MinTbSize), y>>uint(s.Log2MinTbSize)) }
 	for c := 0; c < frame.Components; c++ {
 		pl := &frame.Planes[c]
-		rec := append([]uint16(nil), pl.Pix...)
+		rec := append([]uint16(nil), px(pl)...)
 		subW, subH := int(s.CodedWidth)/pl.Width, int(s.CodedHeight)/pl.Height
 		bd := int(s.BitDepthLuma)
 		if c > 0 {
@@ -698,7 +699,7 @@ func refSAO(ww *walkWriter, frame *DecodedPicture, plans []segPlan) {
 								offs = int(p.Offset[c][bandIdx-1])
 							}
 						}
-						pl.Pix[ys*pl.Stride+xs] = uint16(min(max(cur+offs, 0), 1<<uint(bd)-1))
+						pl.set(ys*pl.Stride+xs, min(max(cur+offs, 0), 1<<uint(bd)-1))
 					}
 				}
 			}
@@ -735,20 +736,21 @@ func TestSampleAdaptiveOffsetAgainstTheSpecificationText(t *testing.T) {
 		refDeblock(ww, ref.frame, plans)
 		deblocked := make([][]uint16, frame.Components)
 		for c := range deblocked {
-			deblocked[c] = append([]uint16(nil), frame.Planes[c].Pix...)
+			deblocked[c] = append([]uint16(nil), px(&frame.Planes[c])...)
 		}
 		ps.SAO(frame, ww.sps, ww.pps)
 		refSAO(ww, ref.frame, plans)
 		for c := 0; c < frame.Components; c++ {
 			total++
-			if !reflect.DeepEqual(frame.Planes[c].Pix, deblocked[c]) {
+			got, want := px(&frame.Planes[c]), px(&ref.frame.Planes[c])
+			if !reflect.DeepEqual(got, deblocked[c]) {
 				changed++
 			}
-			if !reflect.DeepEqual(frame.Planes[c].Pix, ref.frame.Planes[c].Pix) {
+			if !reflect.DeepEqual(got, want) {
 				w := frame.Planes[c].Width
-				for i := range frame.Planes[c].Pix {
-					if frame.Planes[c].Pix[i] != ref.frame.Planes[c].Pix[i] {
-						t.Fatalf("iter %d: component %d differs at (%d,%d): %d, the text's %d", iter, c, i%w, i/w, frame.Planes[c].Pix[i], ref.frame.Planes[c].Pix[i])
+				for i := range got {
+					if got[i] != want[i] {
+						t.Fatalf("iter %d: component %d differs at (%d,%d): %d, the text's %d", iter, c, i%w, i/w, got[i], want[i])
 					}
 				}
 			}

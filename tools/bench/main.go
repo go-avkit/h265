@@ -113,7 +113,8 @@ func writePicture(h writer, pic *h265.DecodedPicture) {
 		row := make([]byte, 0, 2*pl.Width)
 		for y := 0; y < pl.Height; y++ {
 			row = row[:0]
-			for _, v := range pl.Pix[y*pl.Stride : y*pl.Stride+pl.Width] {
+			for x := 0; x < pl.Width; x++ {
+				v := pl.At(x, y)
 				row = append(row, byte(v))
 				if wide {
 					row = append(row, byte(v>>8))

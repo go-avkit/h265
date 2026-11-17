@@ -31,6 +31,19 @@ type interpScratch struct {
 	edge [71 * 71]uint16
 	mid  [71 * 64]int16
 	pred [2][64 * 64]int32
+	// blk is a block the kernels write as 16-bit samples before they are narrowed into a byte plane.
+	blk [64 * 64]uint16
+}
+
+// clampedWindow fills dst (rows ss apart) with the ww x hh window of the plane at ( x0, y0 ),
+// the samples outside the plane being those of its nearest edge (8-222, 8-223).
+func clampedWindow[T pixel](dst []uint16, ss int, pix []T, pl *Plane, x0, y0, ww, hh int) {
+	for y := 0; y < hh; y++ {
+		row := pix[clip3(0, pl.Height-1, y0+y)*pl.Stride:]
+		for x := 0; x < ww; x++ {
+			dst[y*ss+x] = uint16(row[clip3(0, pl.Width-1, x0+x)])
+		}
+	}
 }
 
 // interpolateFast is interpolate for bitDepth <= 12 and blocks of at most 64 x 64.
@@ -46,17 +59,22 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 	}
 	var src []uint16
 	var ss int
-	if x0 >= 0 && y0 >= 0 && x0+ww <= pl.Width && y0+hh <= pl.Height {
-		src, ss = pl.Pix[y0*pl.Stride+x0:], pl.Stride
-	} else {
+	inside := x0 >= 0 && y0 >= 0 && x0+ww <= pl.Width && y0+hh <= pl.Height
+	switch {
+	case inside && pl.Pix8 == nil:
+		src, ss = pl.Pix16[y0*pl.Stride+x0:], pl.Stride
+	case pl.Pix8 != nil: // the kernels take 16-bit samples: the window of the byte plane, widened
 		ss = ww
 		src = sc.edge[:ww*hh]
-		for y := 0; y < hh; y++ {
-			row := pl.Pix[clip3(0, pl.Height-1, y0+y)*pl.Stride:]
-			for x := 0; x < ww; x++ {
-				src[y*ss+x] = row[clip3(0, pl.Width-1, x0+x)]
-			}
+		if inside {
+			widen(src, 0, ss, pl.Pix8, y0*pl.Stride+x0, pl.Stride, ww, hh)
+		} else {
+			clampedWindow(src, ss, pl.Pix8, pl, x0, y0, ww, hh)
 		}
+	default:
+		ss = ww
+		src = sc.edge[:ww*hh]
+		clampedWindow(src, ss, pl.Pix16, pl, x0, y0, ww, hh)
 	}
 	switch {
 	case xFrac == 0 && yFrac == 0:

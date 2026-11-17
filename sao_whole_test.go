@@ -25,7 +25,7 @@ type saoScene struct {
 	_           struct{}
 }
 
-func (sc saoScene) run(t *testing.T, class uint8, seed uint64) {
+func (sc saoScene) run(t *testing.T, class uint8, seed uint64, bytes bool) {
 	t.Helper()
 	rng := rand.New(rand.NewPCG(seed, 99))
 	sps := SPS{CodedWidth: uint32(sc.width), CodedHeight: uint32(sc.width), Log2CtbSize: 4, Log2MinCbSize: 3, Log2MinTbSize: 2,
@@ -57,15 +57,24 @@ func (sc saoScene) run(t *testing.T, class uint8, seed uint64) {
 	for i := range src {
 		src[i] = uint16(100 + rng.IntN(6))
 	}
-	got := &Plane{Width: sc.width, Height: sc.width, Stride: sc.width, Pix: append([]uint16(nil), src...)}
+	got := &Plane{Width: sc.width, Height: sc.width, Stride: sc.width, Pix16: append([]uint16(nil), src...)}
 	want := append([]uint16(nil), src...)
 
 	taken := 0
 	saoWholeBlockHook = func() { taken++ }
 	defer func() { saoWholeBlockHook = nil }()
-	ps.saoCTB(got, src, 0, &p, sc.rx, sc.ry, 16, 16, 1, 1, 8, anyNoFilter, pps)
+	if bytes { // the same scene on a byte plane: the kernels go through the bridge
+		src8 := make([]uint8, len(src))
+		for i, v := range src {
+			src8[i] = uint8(v)
+		}
+		got = &Plane{Width: sc.width, Height: sc.width, Stride: sc.width, Pix8: append([]uint8(nil), src8...)}
+		saoCTB(ps, new(saoBridge), got, got.Pix8, src8, 0, &p, sc.rx, sc.ry, 16, 16, 1, 1, 8, anyNoFilter, pps)
+	} else {
+		saoCTB[uint16](ps, nil, got, got.Pix16, src, 0, &p, sc.rx, sc.ry, 16, 16, 1, 1, 8, anyNoFilter, pps)
+	}
 	if (taken > 0) != sc.whole {
-		t.Errorf("%s class %d: the whole-block path taken %d times, expected %v", sc.name, class, taken, sc.whole)
+		t.Errorf("%s class %d bytes %v: the whole-block path taken %d times, expected %v", sc.name, class, bytes, taken, sc.whole)
 	}
 
 	// the text's conditions, one sample at a time
@@ -111,10 +120,10 @@ func (sc saoScene) run(t *testing.T, class uint8, seed uint64) {
 			}
 		}
 	}
-	if !reflect.DeepEqual(got.Pix, want) {
+	if gotPix := px(got); !reflect.DeepEqual(gotPix, want) {
 		for i := range want {
-			if got.Pix[i] != want[i] {
-				t.Fatalf("%s class %d: sample (%d,%d) is %d, the text gives %d", sc.name, class, i%sc.width, i/sc.width, got.Pix[i], want[i])
+			if gotPix[i] != want[i] {
+				t.Fatalf("%s class %d bytes %v: sample (%d,%d) is %d, the text gives %d", sc.name, class, bytes, i%sc.width, i/sc.width, gotPix[i], want[i])
 			}
 		}
 	}
@@ -177,7 +186,8 @@ func TestSAOWholeBlockRoutingAgainstTheText(t *testing.T) {
 	}
 	for _, sc := range scenes {
 		for class := uint8(0); class < 4; class++ {
-			sc.run(t, class, uint64(class)+7)
+			sc.run(t, class, uint64(class)+7, false)
+			sc.run(t, class, uint64(class)+7, true)
 		}
 	}
 }

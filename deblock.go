@@ -271,7 +271,11 @@ func (ps *PictureState) deblockLuma(frame *DecodedPicture, sps SPS, vertical boo
 			beta := betaTable[clip3(0, 51, qpL+int(ps.DbBeta[ctb])*2)] << uint(bd-8)
 			tc := tcTable[clip3(0, 53, qpL+2*(bs-1)+int(ps.DbTc[ctb])*2)] << uint(bd-8)
 			noP, noQ := ps.NoFilter[ps.cuAt(px, py)], ps.NoFilter[ps.cuAt(x, y)]
-			filterLumaEdge(pl.Pix, y*pl.Stride+x, along, across, beta, tc, bd, noP, noQ)
+			if pl.Pix8 != nil {
+				filterLumaEdge(pl.Pix8, y*pl.Stride+x, along, across, beta, tc, bd, noP, noQ)
+			} else {
+				filterLumaEdge(pl.Pix16, y*pl.Stride+x, along, across, beta, tc, bd, noP, noQ)
+			}
 		}
 	}
 }
@@ -279,7 +283,7 @@ func (ps *PictureState) deblockLuma(frame *DecodedPicture, sps SPS, vertical boo
 // filterLumaEdge is the decision process of 8.7.2.5.3 and the filtering of
 // 8.7.2.5.4 and 8.7.2.5.7 for four lines of samples across an edge: line k starts at
 // pix[ base + k * along ], q_i is i steps of across ahead and p_i behind.
-func filterLumaEdge(pix []uint16, base, along, across, beta, tc, bitDepth int, noP, noQ bool) {
+func filterLumaEdge[T pixel](pix []T, base, along, across, beta, tc, bitDepth int, noP, noQ bool) {
 	at := func(k, i int) int { return int(pix[base+k*along+i*across]) } // i >= 0: q_i; i < 0: p_(-i-1)
 	p := func(i, k int) int { return at(k, -i-1) }
 	q := func(i, k int) int { return at(k, i) }
@@ -337,10 +341,10 @@ func filterLumaEdge(pix []uint16, base, along, across, beta, tc, bitDepth int, n
 			nq = 0
 		}
 		for i := 0; i < np; i++ {
-			pix[base+k*along-(i+1)*across] = uint16(pf[i])
+			pix[base+k*along-(i+1)*across] = T(pf[i])
 		}
 		for i := 0; i < nq; i++ {
-			pix[base+k*along+i*across] = uint16(qf[i])
+			pix[base+k*along+i*across] = T(qf[i])
 		}
 	}
 }
@@ -384,18 +388,18 @@ func (ps *PictureState) deblockChroma(frame *DecodedPicture, sps SPS, pps PPS, v
 						bx, by = xc+k, yc
 					}
 					base := by*pl.Stride + bx
-					p0, p1 := int(pl.Pix[base-across]), int(pl.Pix[base-2*across])
-					q0, q1 := int(pl.Pix[base]), int(pl.Pix[base+across])
+					p0, p1 := pl.get(base-across), pl.get(base-2*across)
+					q0, q1 := pl.get(base), pl.get(base+across)
 					delta := clip3(-tc, tc, (((q0-p0)<<2)+p1-q1+4)>>3)
 					pxl, pyl := (bx-bit(vertical))*subW, by*subH
 					if !vertical {
 						pxl, pyl = bx*subW, (by-1)*subH
 					}
 					if !ps.NoFilter[ps.cuAt(pxl, pyl)] {
-						pl.Pix[base-across] = uint16(clip3(0, maxVal, p0+delta))
+						pl.set(base-across, clip3(0, maxVal, p0+delta))
 					}
 					if !ps.NoFilter[ps.cuAt(bx*subW, by*subH)] {
-						pl.Pix[base] = uint16(clip3(0, maxVal, q0-delta))
+						pl.set(base, clip3(0, maxVal, q0-delta))
 					}
 				}
 				_ = along

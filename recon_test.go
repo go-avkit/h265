@@ -31,8 +31,8 @@ type refRecon struct {
 func newRefRecon(ww *walkWriter) *refRecon {
 	r := &refRecon{ww: ww, frame: NewDecodedPicture(ww.sps), factors: ScalingFactorsOf(ww.sps, ww.pps)}
 	for c := 0; c < r.frame.Components; c++ {
-		r.known[c] = make([]bool, len(r.frame.Planes[c].Pix))
-		r.seq[c] = make([]int, len(r.frame.Planes[c].Pix))
+		r.known[c] = make([]bool, r.frame.Planes[c].Len())
+		r.seq[c] = make([]int, r.frame.Planes[c].Len())
 		r.subW[c], r.subH[c] = int(ww.sps.CodedWidth)/r.frame.Planes[c].Width, int(ww.sps.CodedHeight)/r.frame.Planes[c].Height
 	}
 	return r
@@ -40,7 +40,7 @@ func newRefRecon(ww *walkWriter) *refRecon {
 
 func (r *refRecon) set(c, x, y int, v uint16) {
 	pl := &r.frame.Planes[c]
-	pl.Pix[y*pl.Stride+x] = v
+	pl.set(y*pl.Stride+x, int(v))
 	r.known[c][y*pl.Stride+x] = true
 	r.seq[c][y*pl.Stride+x] = r.blocks
 }
@@ -65,7 +65,7 @@ func (r *refRecon) refBlock(c, x, y, log2, mode int, res []int32, cu *CodingUnit
 		ok := xn >= 0 && yn >= 0 && yn < pl.Height && r.known[c][yn*pl.Stride+xn] && r.sameSliceAndTile(c, xn, yn, x, y)
 		am[[2]int{-1, yy}] = ok
 		if ok {
-			pm[[2]int{-1, yy}] = int32(pl.Pix[yn*pl.Stride+xn])
+			pm[[2]int{-1, yy}] = int32(pl.get(yn*pl.Stride + xn))
 		}
 	}
 	for xx := 0; xx <= 2*n-1; xx++ {
@@ -73,7 +73,7 @@ func (r *refRecon) refBlock(c, x, y, log2, mode int, res []int32, cu *CodingUnit
 		ok := yn >= 0 && xn < pl.Width && r.known[c][yn*pl.Stride+xn] && r.sameSliceAndTile(c, xn, yn, x, y)
 		am[[2]int{xx, -1}] = ok
 		if ok {
-			pm[[2]int{xx, -1}] = int32(pl.Pix[yn*pl.Stride+xn])
+			pm[[2]int{xx, -1}] = int32(pl.get(yn*pl.Stride + xn))
 		}
 	}
 	bd := r.frame.BitDepth[c]
@@ -252,16 +252,17 @@ func TestIntraReconstructionAgainstTheSpecificationText(t *testing.T) {
 			}
 		}
 		for c := 0; c < frame.Components; c++ {
-			if !reflect.DeepEqual(frame.Planes[c].Pix, ref.frame.Planes[c].Pix) {
+			got, want := px(&frame.Planes[c]), px(&ref.frame.Planes[c])
+			if !reflect.DeepEqual(got, want) {
 				// The first difference in reconstruction order is the one that explains the rest.
 				w, first := frame.Planes[c].Width, -1
-				for i := range frame.Planes[c].Pix {
-					if frame.Planes[c].Pix[i] != ref.frame.Planes[c].Pix[i] && (first < 0 || ref.seq[c][i] < ref.seq[c][first]) {
+				for i := range got {
+					if got[i] != want[i] && (first < 0 || ref.seq[c][i] < ref.seq[c][first]) {
 						first = i
 					}
 				}
 				t.Fatalf("iter %d: component %d differs first, in reconstruction order, at (%d,%d) of block %d: %d, the text's %d",
-					iter, c, first%w, first/w, ref.seq[c][first], frame.Planes[c].Pix[first], ref.frame.Planes[c].Pix[first])
+					iter, c, first%w, first/w, ref.seq[c][first], got[first], want[first])
 			}
 		}
 	}

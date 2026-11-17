@@ -33,7 +33,7 @@ func NewDecodedPicture(sps SPS) *DecodedPicture {
 			cw, ch = w/subW, h/subH
 			p.BitDepth[c] = int(sps.BitDepthChroma)
 		}
-		p.Planes[c] = Plane{Width: cw, Height: ch, Stride: cw, Pix: make([]uint16, cw*ch)}
+		p.Planes[c] = newPlane(cw, ch, p.BitDepth[c])
 	}
 	return p
 }
@@ -87,7 +87,7 @@ func (r *Reconstructor) CodingUnit(cu *CodingUnit) {
 	luma := &r.Frame.Planes[0]
 	for j := 0; j < n; j++ {
 		for i := 0; i < n; i++ {
-			luma.Pix[(cu.Y+j)*luma.Stride+cu.X+i] = cu.PcmLuma[n*j+i] << uint(int(s.BitDepthLuma)-int(s.PCM.BitDepthLuma))
+			luma.set((cu.Y+j)*luma.Stride+cu.X+i, int(cu.PcmLuma[n*j+i]<<uint(int(s.BitDepthLuma)-int(s.PCM.BitDepthLuma))))
 		}
 	}
 	for c := 1; c < r.Frame.Components; c++ {
@@ -97,7 +97,7 @@ func (r *Reconstructor) CodingUnit(cu *CodingUnit) {
 		for j := 0; j < ch; j++ {
 			for i := 0; i < cw; i++ {
 				v := cu.PcmChroma[cw*(j+(c-1)*ch)+i]
-				pl.Pix[(cu.Y/sh+j)*pl.Stride+cu.X/sw+i] = v << uint(int(s.BitDepthChroma)-int(s.PCM.BitDepthChroma))
+				pl.set((cu.Y/sh+j)*pl.Stride+cu.X/sw+i, int(v<<uint(int(s.BitDepthChroma)-int(s.PCM.BitDepthChroma))))
 			}
 		}
 	}
@@ -245,10 +245,30 @@ func (r *Reconstructor) reconstruct(w *SliceWalker, cu *CodingUnit, c, x, y, log
 		bitDepth = int(r.sps.BitDepthChroma)
 	}
 	maxVal := int32(1)<<uint(bitDepth) - 1
+	if pl.Pix8 != nil {
+		addResidual(pl.Pix8, y*pl.Stride+x, pl.Stride, n, res, maxVal)
+	} else {
+		addResidual(pl.Pix16, y*pl.Stride+x, pl.Stride, n, res, maxVal)
+	}
+}
+
+// addResidual adds the n x n residual res to the block at index base of pix, clipped to maxVal.
+func addResidual[T pixel](pix []T, base, stride, n int, res []int32, maxVal int32) {
 	for j := 0; j < n; j++ {
-		row, rr := pl.Pix[(y+j)*pl.Stride+x:(y+j)*pl.Stride+x+n], res[j*n:j*n+n]
+		row, rr := pix[base+j*stride:base+j*stride+n], res[j*n:j*n+n]
 		for i := range row {
-			row[i] = uint16(min(max(int32(row[i])+rr[i], 0), maxVal))
+			row[i] = T(min(max(int32(row[i])+rr[i], 0), maxVal))
+		}
+	}
+}
+
+// putPrediction writes the intra prediction plus the residual, clipped to maxVal, as the n x n
+// block at index base of pix.
+func putPrediction[T pixel](pix []T, base, stride, n int, pred, res []int32, maxVal int32) {
+	for j := 0; j < n; j++ {
+		row, pp, rr := pix[base+j*stride:base+j*stride+n], pred[j*n:j*n+n], res[j*n:j*n+n]
+		for i := range row {
+			row[i] = T(min(max(pp[i]+rr[i], 0), maxVal))
 		}
 	}
 }
@@ -278,7 +298,7 @@ func (r *Reconstructor) block(w *SliceWalker, cu *CodingUnit, c, x, y, log2, mod
 			continue
 		}
 		avail[i] = true
-		refs[i] = int32(pl.Pix[yn*pl.Stride+xn])
+		refs[i] = int32(pl.get(yn*pl.Stride + xn))
 	}
 	bitDepth := int(r.sps.BitDepthLuma)
 	if c > 0 {
@@ -293,9 +313,9 @@ func (r *Reconstructor) block(w *SliceWalker, cu *CodingUnit, c, x, y, log2, mod
 		NoBoundaryFilter: r.sps.Range.ImplicitRDPCM && cu.TransquantBypass,
 	}, pred)
 	maxVal := int32(1)<<uint(bitDepth) - 1
-	for j := 0; j < n; j++ {
-		for i := 0; i < n; i++ {
-			pl.Pix[(y+j)*pl.Stride+x+i] = uint16(min(max(pred[j*n+i]+res[j*n+i], 0), maxVal))
-		}
+	if pl.Pix8 != nil {
+		putPrediction(pl.Pix8, y*pl.Stride+x, pl.Stride, n, pred, res, maxVal)
+	} else {
+		putPrediction(pl.Pix16, y*pl.Stride+x, pl.Stride, n, pred, res, maxVal)
 	}
 }
