@@ -52,7 +52,10 @@ yuv file) that the suite ships: 45 of the 52 such streams it decodes match; the 
   run through it;
 - SEI parsing and the decoded picture hash (MD5, CRC, checksum).
 
-`decode` does not use it: it still wraps a third-party decoder for HEVC.
+`decode` v0.10.0 decodes HEVC with this decoder (h265 v0.21.0). Since v0.21.0 a
+caller can set `Unit.Tag` (a uint64); the picture whose first slice segment came from
+a tagged unit carries it in `Output.Tag`, whatever the output order, which carries a
+container timestamp through reordering, skipped RASL pictures and refused pictures.
 
 ### Speed
 
@@ -63,24 +66,26 @@ but writing into its planes corrupts the decoding of later pictures that referen
 it. A caller that modifies samples must call `(*DecodedPicture).Clone()` first,
 which returns an owned, writable copy.
 
-v0.19.0 runs more of the HEVC kernels of go-videodsp/kernels (two-list average,
-inverse DCT and DST, vertical-only interpolation) and crops output as a view, with
-the output unchanged bit for bit (every conformance gate is the same; the md5 of
-four 1080p outputs equals ffmpeg's). Frames per second by CPU time, one core (AMD
-Ryzen 9 7950X, `taskset -c 5`, four runs of five rounds interleaved, load 0.15 to
-1.06, 2026-11-16). The third-party decoder is the one go-avkit/decode v0.9.0 uses
-for HEVC, measured through `DecodeTrack`; ffmpeg is 6.1.1 with `-threads 1`.
+v0.20.0 runs the SAO edge offset on the kernel over the whole CTB, tightens plain-Go
+loops and uses widening kernels from go-videodsp/kernels v0.17.0, with the output
+unchanged bit for bit (every conformance gate is the same; the md5 of four 1080p
+outputs equals ffmpeg's). Frames per second by CPU time, one core (AMD Ryzen 9 7950X,
+`taskset -c 5`, ABBA of five rounds each, load 0.44 to 1.21, 2026-11-16). "Third-party"
+is gen2brain/h265, the decoder `decode` v0.9.0 used for HEVC, measured through
+`DecodeTrack`; ffmpeg is 6.1.1 with `-threads 1`.
 
-| stream (1080p) | v0.18.0 | v0.19.0 | third-party | ffmpeg |
-|---|---|---|---|---|
-| alien, Main | 58.2 | 76.1 | 87.4 | 395 |
-| fade, Main | 53.8 | 68.8 | 80.0 | 430 |
-| alien, Main 10 | 60.1 | 79.3 | 30.0 | 303 |
-| alien8 | 66.6 | 85.6 | 95.3 | 429 |
+| stream (1080p) | v0.19.0 | v0.20.0 | third-party | ffmpeg | v0.20.0 / third-party | v0.20.0 / ffmpeg |
+|---|---|---|---|---|---|---|
+| alien, Main | 75.9 | 91.2 | 87.2 | 392.6 | 1.05 | 0.23 |
+| fade, Main | 68.7 | 82.6 | 79.9 | 428.2 | 1.03 | 0.19 |
+| alien, Main 10 | 79.1 | 92.0 | 30.0 | 303.2 | 3.07 | 0.30 |
+| alien8 | 85.6 | 104.0 | 95.2 | 431.0 | 1.09 | 0.24 |
 
-On 8-bit streams this decoder is still slower than the third-party one, at 0.86 to
-0.90 of its speed, an open defect; on Main 10 it is 2.6 times as fast. It runs at
-0.16 to 0.26 of ffmpeg's speed. No parity is claimed.
+On this x86 host the decoder alone is faster than the third-party decoder on all four
+streams (1.03 to 1.09 times on 8-bit, 3.07 on Main 10) and still 0.19 to 0.30 of
+ffmpeg's speed, an open defect. Through `decode` the 8-bit streams are slower on x86
+(see the decode README, go-avkit/decode#101). Not measured: arm64 against the
+third-party decoder. No parity is claimed.
 
 **Security fix in v0.16.0:** on a hostile SPS (a picture width or height that is
 not a multiple of the minimum coding block size) v0.14.0 and v0.15.0 could panic
