@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/cache@v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: .conformance
           key: h265-conformance-${{ hashFiles('testdata/conformance.sha256', 'testdata/conformance-rext.sha256') }}
