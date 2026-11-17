@@ -69,9 +69,9 @@ func (sc saoScene) run(t *testing.T, class uint8, seed uint64, bytes bool) {
 			src8[i] = uint8(v)
 		}
 		got = &Plane{Width: sc.width, Height: sc.width, Stride: sc.width, Pix8: append([]uint8(nil), src8...)}
-		saoCTB(ps, new(saoBridge), got, got.Pix8, src8, 0, &p, sc.rx, sc.ry, 16, 16, 1, 1, 8, anyNoFilter, pps)
+		saoCTB(ps, got, got.Pix8, src8, 0, &p, sc.rx, sc.ry, 16, 16, 1, 1, 8, anyNoFilter, pps)
 	} else {
-		saoCTB[uint16](ps, nil, got, got.Pix16, src, 0, &p, sc.rx, sc.ry, 16, 16, 1, 1, 8, anyNoFilter, pps)
+		saoCTB[uint16](ps, got, got.Pix16, src, 0, &p, sc.rx, sc.ry, 16, 16, 1, 1, 8, anyNoFilter, pps)
 	}
 	if (taken > 0) != sc.whole {
 		t.Errorf("%s class %d bytes %v: the whole-block path taken %d times, expected %v", sc.name, class, bytes, taken, sc.whole)

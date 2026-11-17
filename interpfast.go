@@ -33,8 +33,6 @@ type interpScratch struct {
 	edge8 [71 * 71]uint8
 	mid   [71 * 64]int16
 	pred  [2][64 * 64]int32
-	// blk is a block the kernels write as 16-bit samples before they are narrowed into a byte plane.
-	blk [64 * 64]uint16
 }
 
 // clampedWindow fills dst (rows ss apart) with the ww x hh window of the plane at ( x0, y0 ),

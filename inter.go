@@ -167,32 +167,31 @@ func weightedKernel(sc *interpScratch, pl *Plane, x0, y0, w, h int, p [2][]int32
 	if ew != nil {
 		log2Wd, w0, w1, o0, o1 = ew.log2Wd, ew.w[0], ew.w[1], ew.o[0], ew.o[1]
 	}
-	// The kernels write 16-bit samples: into the plane, or for a byte plane into a block that is
-	// then narrowed into it.
-	dst, off, stride := pl.Pix16, y0*pl.Stride+x0, pl.Stride
-	if pl.Pix8 != nil {
-		dst, off, stride = sc.blk[:w*h], 0, w
-	}
+	off, stride := y0*pl.Stride+x0, pl.Stride
 	var err error
-	if bi {
-		err = hevc.TryWeightBi(dst, off, stride, p[0], p[1], 0, w, w, h, bitDepth, log2Wd, w0, w1, o0, o1)
-	} else {
-		if l == 1 {
-			w0, o0 = w1, o1
-		}
-		err = hevc.TryWeightUni(dst, off, stride, p[l], 0, w, w, h, bitDepth, log2Wd, w0, o0)
-	}
 	name := "WeightUni"
 	if bi {
 		name = "WeightBi"
 	}
-	if kernelRefused(name, err) {
-		return false
+	switch {
+	case pl.Pix8 != nil && bitDepth != 8:
+		return false // the byte kernels clip at 255
+	case pl.Pix8 != nil && bi:
+		err = hevc.TryWeightBiBytes(pl.Pix8, off, stride, p[0], p[1], 0, w, w, h, log2Wd, w0, w1, o0, o1)
+	case pl.Pix8 != nil:
+		if l == 1 {
+			w0, o0 = w1, o1
+		}
+		err = hevc.TryWeightUniBytes(pl.Pix8, off, stride, p[l], 0, w, w, h, log2Wd, w0, o0)
+	case bi:
+		err = hevc.TryWeightBi(pl.Pix16, off, stride, p[0], p[1], 0, w, w, h, bitDepth, log2Wd, w0, w1, o0, o1)
+	default:
+		if l == 1 {
+			w0, o0 = w1, o1
+		}
+		err = hevc.TryWeightUni(pl.Pix16, off, stride, p[l], 0, w, w, h, bitDepth, log2Wd, w0, o0)
 	}
-	if pl.Pix8 != nil {
-		narrow(pl.Pix8, y0*pl.Stride+x0, pl.Stride, dst, 0, w, w, h)
-	}
-	return true
+	return !kernelRefused(name, err)
 }
 
 // fullPel is a block of a reference plane at a full-sample position inside the plane.
@@ -207,6 +206,9 @@ type fullPel struct {
 // where shift2 is shift3 + 1.
 func average(dst *Plane, x0, y0, w, h int, a, b fullPel) {
 	if dst.Pix8 != nil {
+		if !kernelRefused("AverageBytes", hevc.TryAverageBytes(dst.Pix8, y0*dst.Stride+x0, dst.Stride, a.ref.Pix8, a.yi*a.ref.Stride+a.xi, a.ref.Stride, b.ref.Pix8, b.yi*b.ref.Stride+b.xi, b.ref.Stride, w, h)) {
+			return
+		}
 		averageGo(dst.Pix8, y0*dst.Stride+x0, dst.Stride, a.ref.Pix8, a.yi*a.ref.Stride+a.xi, a.ref.Stride, b.ref.Pix8, b.yi*b.ref.Stride+b.xi, b.ref.Stride, w, h)
 		return
 	}

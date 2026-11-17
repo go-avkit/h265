@@ -6,9 +6,12 @@ package h265
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/go-videodsp/kernels/hevc"
 )
 
 // countRefusals runs f with the refusal hook counting, by entry point.
@@ -131,6 +134,57 @@ func TestAHorizontalPassOver71RowsRunsInBands(t *testing.T) {
 				t.Fatalf("bytes %v: sample %d: %d, the Go loops give %d", bytes, i, got[i], want[i])
 			}
 		}
+	}
+}
+
+// The same for a plane of bytes: the Go loop computes the block the kernel refuses.
+func TestAverageOfBytesFallsBackToTheGoLoopWhenTheKernelRefuses(t *testing.T) {
+	mk := func(seed uint8) *Plane {
+		pl := &Plane{Width: 8, Height: 4, Stride: 8, Pix8: make([]uint8, 32)}
+		for i := range pl.Pix8 {
+			pl.Pix8[i] = seed + uint8(i)*37
+		}
+		return pl
+	}
+	ra, rb, dst := mk(1), mk(200), mk(0)
+	refusals := countRefusals(t, func() {
+		average(dst, 1, 1, 3, 2, fullPel{ref: ra, xi: 2, yi: 1}, fullPel{ref: rb, xi: 4, yi: 2})
+	})
+	if refusals["AverageBytes"] != 1 {
+		t.Errorf("refusals %v", refusals)
+	}
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 3; x++ {
+			want := uint8((int(ra.Pix8[(1+y)*8+2+x]) + int(rb.Pix8[(2+y)*8+4+x]) + 1) >> 1)
+			if got := dst.Pix8[(1+y)*8+1+x]; got != want {
+				t.Errorf("(%d,%d): %d, want %d", x, y, got, want)
+			}
+		}
+	}
+}
+
+// A byte plane of a bit depth other than 8 does not go to the byte kernels, which clip at 255: the
+// weighting runs in Go (no refusal counted), and the SAO kernels refuse the block.
+func TestByteKernelsLeaveOtherBitDepthsToGo(t *testing.T) {
+	pl := &Plane{Width: 8, Height: 4, Stride: 8, Pix8: make([]uint8, 32)}
+	p := [2][]int32{make([]int32, 32), make([]int32, 32)}
+	for i := range p[0] {
+		p[0][i] = int32(i) << 6
+	}
+	var sc interpScratch
+	refusals := countRefusals(t, func() {
+		weighted(&sc, pl, 0, 0, 8, 4, p, [2]bool{true, false}, 7, nil)
+	})
+	if len(refusals) != 0 {
+		t.Errorf("refusals %v", refusals)
+	}
+	var off [4]int16
+	src := make([]uint8, 100)
+	if err := saoBandKernel(pl.Pix8, src, 8, 0, 0, 8, 4, 7, 0, &off); !errors.Is(err, hevc.ErrRefused) {
+		t.Errorf("band: %v", err)
+	}
+	if err := saoEdgeKernel(pl.Pix8, src, 8, 1, 1, 4, 2, 7, 0, &off); !errors.Is(err, hevc.ErrRefused) {
+		t.Errorf("edge: %v", err)
 	}
 }
 
