@@ -126,6 +126,20 @@ func SplitLengthPrefixed(data []byte, lengthSize int) ([]Unit, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The last byte of a NAL unit is never 0x00 (7.4.2: a final 0x03 follows cabac_zero_words),
+	// so zero bytes after the payload belong to the framing, as they do between the units of a
+	// byte stream (which SplitAnnexB drops): a muxer that cut a byte stream at its start codes
+	// leaves the zero byte of a four-byte code on the unit before it, and a sample then ends in
+	// one. The two header bytes are never trimmed.
+	for i, u := range raw {
+		if len(u) > 2 {
+			n := len(u)
+			for n > 2 && u[n-1] == 0 {
+				n--
+			}
+			raw[i] = u[:n]
+		}
+	}
 	return units(raw)
 }
 
