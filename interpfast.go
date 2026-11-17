@@ -29,19 +29,21 @@ import "github.com/go-videodsp/kernels/hevc"
 // first-stage rows. The largest block is 64 x 64 with 7 more rows and columns.
 type interpScratch struct {
 	edge [71 * 71]uint16
-	mid  [71 * 64]int16
-	pred [2][64 * 64]int32
+	// edge8 is the replicated window of a byte plane.
+	edge8 [71 * 71]uint8
+	mid   [71 * 64]int16
+	pred  [2][64 * 64]int32
 	// blk is a block the kernels write as 16-bit samples before they are narrowed into a byte plane.
 	blk [64 * 64]uint16
 }
 
 // clampedWindow fills dst (rows ss apart) with the ww x hh window of the plane at ( x0, y0 ),
 // the samples outside the plane being those of its nearest edge (8-222, 8-223).
-func clampedWindow[T pixel](dst []uint16, ss int, pix []T, pl *Plane, x0, y0, ww, hh int) {
+func clampedWindow[D, T pixel](dst []D, ss int, pix []T, pl *Plane, x0, y0, ww, hh int) {
 	for y := 0; y < hh; y++ {
 		row := pix[clip3(0, pl.Height-1, y0+y)*pl.Stride:]
 		for x := 0; x < ww; x++ {
-			dst[y*ss+x] = uint16(row[clip3(0, pl.Width-1, x0+x)])
+			dst[y*ss+x] = D(row[clip3(0, pl.Width-1, x0+x)])
 		}
 	}
 }
@@ -63,14 +65,23 @@ func interpolateFast(sc *interpScratch, pl *Plane, xInt, yInt, xFrac, yFrac, w, 
 	switch {
 	case inside && pl.Pix8 == nil:
 		src, ss = pl.Pix16[y0*pl.Stride+x0:], pl.Stride
-	case pl.Pix8 != nil: // the kernels take 16-bit samples: the window of the byte plane, widened
+	case pl.Pix8 != nil:
+		// the byte kernels read the plane (or its replicated window) as it is
+		var src8 []uint8
+		var ss8 int
+		if inside {
+			src8, ss8 = pl.Pix8[y0*pl.Stride+x0:], pl.Stride
+		} else {
+			src8, ss8 = sc.edge8[:ww*hh], ww
+			clampedWindow(src8, ss8, pl.Pix8, pl, x0, y0, ww, hh)
+		}
+		if interpolateBytes(sc, src8, ss8, w, h, hh, xFrac, yFrac, taps, shift3, out) {
+			return
+		}
+		// refused: widen the window and take the 16-bit path
 		ss = ww
 		src = sc.edge[:ww*hh]
-		if inside {
-			widen(src, 0, ss, pl.Pix8, y0*pl.Stride+x0, pl.Stride, ww, hh)
-		} else {
-			clampedWindow(src, ss, pl.Pix8, pl, x0, y0, ww, hh)
-		}
+		widen(src, 0, ss, src8, 0, ss8, ww, hh)
 	default:
 		ss = ww
 		src = sc.edge[:ww*hh]
@@ -188,6 +199,49 @@ func kernelV(src []uint16, ss, w, h, bitDepth int, taps []int32, out []int32) bo
 	}
 	c := coefficients(taps)
 	return !kernelRefused("VPassU8", hevc.TryVPassU8(out, 0, w, src, 3*ss, ss, w, h, bitDepth, &c))
+}
+
+// interpolateBytes is the kernels' interpolation over the bytes of an 8-bit window (src
+// starting at the first sample the filter reads, rows ss apart, hh rows of it); false when
+// the kernels refuse a call, which then runs on the widened window.
+func interpolateBytes(sc *interpScratch, src []uint8, ss, w, h, hh, xFrac, yFrac int, taps [][]int32, shift3 uint, out []int32) bool {
+	n := len(taps[len(taps)-1])
+	switch {
+	case xFrac == 0 && yFrac == 0:
+		return !kernelRefused("WidenBytes", hevc.TryWidenBytes(out, 0, w, src, 0, ss, w, h, int(shift3)))
+	case yFrac == 0 && n == 4:
+		c := coefficients4(taps[xFrac])
+		return !kernelRefused("HPassW4Bytes", hevc.TryHPassW4Bytes(out, 0, w, src, 1, ss, w, h, &c))
+	case yFrac == 0:
+		c := coefficients(taps[xFrac])
+		return !kernelRefused("HPassW8Bytes", hevc.TryHPassW8Bytes(out, 0, w, src, 3, ss, w, h, &c))
+	case xFrac == 0 && n == 4:
+		c := coefficients4(taps[yFrac])
+		return !kernelRefused("VPassU4Bytes", hevc.TryVPassU4Bytes(out, 0, w, src, ss, ss, w, h, &c))
+	case xFrac == 0:
+		c := coefficients(taps[yFrac])
+		return !kernelRefused("VPassU8Bytes", hevc.TryVPassU8Bytes(out, 0, w, src, 3*ss, ss, w, h, &c))
+	}
+	// both fractions: the horizontal pass over hh rows into sc.mid (in bands), then the vertical
+	mid := sc.mid[:hh*w]
+	if n == 4 {
+		c := coefficients4(taps[xFrac])
+		for r := 0; r < hh; r += bandRows {
+			if kernelRefused("HPass4Bytes", hevc.TryHPass4Bytes(mid, r*w, w, src, 1+r*ss, ss, w, min(bandRows, hh-r), &c)) {
+				return false
+			}
+		}
+		cy := coefficients4(taps[yFrac])
+		return !kernelRefused("VPass4", hevc.TryVPass4(out, 0, w, mid, w, w, w, h, &cy))
+	}
+	c := coefficients(taps[xFrac])
+	for r := 0; r < hh; r += bandRows {
+		if kernelRefused("HPass8Bytes", hevc.TryHPass8Bytes(mid, r*w, w, src, 3+r*ss, ss, w, min(bandRows, hh-r), &c)) {
+			return false
+		}
+	}
+	cy := coefficients(taps[yFrac])
+	return !kernelRefused("VPass8", hevc.TryVPass8(out, 0, w, mid, 3*w, w, w, h, &cy))
 }
 
 // kernelRefusal, when set, is called with the name of the entry point each time the
