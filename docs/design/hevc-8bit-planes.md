@@ -20,19 +20,27 @@ The aim: native 8-bit h265 at or above 110 fps, and decode's 8-bit rows at or ab
 
 ## The type
 
-`Plane` gets `Pix8 []uint8` beside `Pix []uint16`: exactly one is non-nil. A `DecodedPicture` whose
-`BitDepth[c] == 8` for every component (chroma and luma equal at 8: the only case a byte picture
-makes sense for) is a byte picture, `Pix8` set on all its planes; every other picture is as today.
-`Plane.Stride`, `Width`, `Height` keep their meaning. Rejected alternatives:
+Decided (coordinator, 2026-11-17): **two typed fields and no field that is nil depending on the
+depth.** `Plane` has `Pix8 []uint8` and `Pix16 []uint16`, exactly one non-nil, documented by bit
+depth: `Pix8` for a plane of bit depth 8, `Pix16` for every other depth. `Plane` gets `Is8() bool`,
+`BitDepth() int` (the plane knows its depth; the picture's `BitDepth` array stays) and
+`At(x, y int) uint16` (any depth, for tests and tools, not for the hot paths). A `DecodedPicture` is
+a byte picture when luma and chroma are both 8 bits (the only case a byte picture makes sense for);
+every other picture is `Pix16` as today. `Stride`, `Width`, `Height` keep their meaning.
+
+`Pix` is **renamed** `Pix16`, with no deprecated alias: the only importer of `go-avkit/h265` in our
+organisations is go-avkit/decode (checked: no other go.mod of the go-avkit organisation, nor any
+clone on the machine, requires it; GitHub code search finds none), and decode moves in the same
+step as the type. Below v1 this is a minor release with a "Behaviour change" note: `Pix` no longer
+exists, and an 8-bit picture has `Pix8` set.
+
+Rejected alternatives:
 
 * *`Plane[T]` generic in the public API*: infects `DecodedPicture`, `Output` and every caller.
 * *A second picture type*: duplicates the DPB, `Crop`, `Clone`, the hash check and the API.
 * *Keep filling `Pix` at 8 bits as well*: no caller breaks, but it is exactly the copy this removes.
+* *`Pix` kept and nil at 8 bits*: a trap that compiles and fails at run time.
 
-**This is an API change**: a caller that reads `Plane.Pix` of an 8-bit picture finds it nil. It is a
-minor version below v1 (breaking changes are minor there), with a release note and
-`Picture.Plane8(c)` / `Plane16(c)` accessors so a caller can ask for either: the accessor of the
-other kind copies (and says so in its godoc), which is the old behaviour for those who want it.
 `Clone` keeps the depth of its source. decode takes `Pix8` straight: its 8-bit `Frame` is a
 `memmove` of a plane per row (and, if its contract is relaxed later to a read-only view, nothing).
 
@@ -41,7 +49,7 @@ other kind copies (and says so in its godoc), which is the old behaviour for tho
 The stages' Go loops are generic over the sample type (`func f[T uint8 | uint16](...)`): the
 instantiations for `uint8` and `uint16` have different GC shapes, so each gets its own compiled
 body, with no dictionary indirection, and the source stays one function. The choice is made once
-per block (`if pl.Pix8 != nil`) where a kernel is called, and at the call of the generic body
+per block (`if pl.Is8()`) where a kernel is called, and at the call of the generic body
 elsewhere. `interpfast.go` already does this for `hpass`/`vpass` (`[S uint16|int16]`).
 
 ## Stage by stage
@@ -92,9 +100,11 @@ the 4-stream ABBA table against the previous main, the refusal gate at zero, md5
    fallbacks are the Go loops, which the refusal counter reports as refusals: the gate is relaxed
    for byte pictures in this step only, and the counter names the reason). Expected: a loss in
    the interpolation and weighting (the kernels are gone) against a gain in the copy and the
-   memory traffic; the table says which wins and the step is not merged if the 8-bit rows
-   fall by more than the copy saves. This is the measurement that separates "the narrowing" from
-   "the traffic" in the gap, which today is only estimated.
+   memory traffic. Decided: **step 1 lands on the Go path alone only if no stream gets slower on
+   either machine** (x86 and M4, the whole 4-stream table); otherwise it stays on its branch until
+   the byte kernels of steps 2 and 3 catch up, and lands with them. Either way it is the
+   measurement that separates "the narrowing" from "the traffic" in the gap, which today is only
+   estimated.
 2. **Byte-source interpolation kernels** (`HPass`, `HPassW`, `VPassU`, `Widen`) and the edge
    scratch: the largest block of the profile (the interpolation passes, 20 % cum).
 3. **Byte-destination kernels** (`Weight`, `Average`, then the full-sample copy path).
@@ -107,8 +117,8 @@ moving, the design is revisited before the next step, not after the last.
 
 ## Risks
 
-* **API break** for callers of `Plane.Pix` on 8-bit pictures. Mitigated by the accessors and the
-  release note; this note asks for the decision.
+* **API break**: `Plane.Pix` becomes `Pix16` and 8-bit pictures have `Pix8`. decode is the only
+  importer; the release carries a "Behaviour change" line.
 * **Code size**: every kernel gets a second set of assembly (about +40 % of the `hevc` package's
   assembly). The generator carries it; the tests are the same table with a second column.
 * **A single wrong lane in a byte kernel** is what the oracle, the guard pages and both-architecture
