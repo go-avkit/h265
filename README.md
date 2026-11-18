@@ -59,6 +59,23 @@ container timestamp through reordering, skipped RASL pictures and refused pictur
 
 ### Speed
 
+**Behaviour change in v0.22.0:** an 8-bit picture is decoded natively into bytes, and
+`Plane.Pix` is renamed `Pix16`, with no alias. An 8-bit picture carries `Pix8 []uint8`
+instead; exactly one of `Pix8` and `Pix16` is non-nil, and `Plane.Is8`, `Plane.At` and
+`Plane.Len` read either. A caller that reads `Pix` must read `Pix16`, or `Pix8` for an
+8-bit stream. The output is unchanged: the md5 of the four streams equals v0.21.0's and
+ffmpeg's. `h265.Decoder` alone against v0.21.0, frames per second (Zen 4, pinned core;
+Apple M4 indicative, load 5 to 9):
+
+| stream | v0.21.0, Zen 4 | v0.22.0, Zen 4 | v0.21.0, M4 | v0.22.0, M4 |
+|---|---|---|---|---|
+| alien-main | 91.1 | 107.6 (+18 %) | 98.4 | 99.0 |
+| fade-main (explicit weights) | 82.2 | 95.3 (+16 %) | 105.7 | 112.8 |
+| alien8 | 103.9 | 125.7 (+21 %) | 112.1 | 120.8 |
+| alien-main10 | 91.8 | 91.3 (same) | 91.3 | 93.3 |
+
+The v0.20.0 table below, against the third-party decoder, predates this change.
+
 **Behaviour change in v0.19.0:** the planes of a picture returned by
 `Decoder.Output` are read-only views of the decoder's own pictures, not copies, and
 `Stride` can be larger than `Width`. A picture you keep stays valid and unchanged,
