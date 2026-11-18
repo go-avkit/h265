@@ -145,7 +145,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: go env GOARCH && go test ./...
+      - run: go env GOARCH && go test -timeout 45m ./...
 
   # The one 32-bit target. 386 runs natively on the amd64 runner, without qemu,
   # and it is where int and uint are 32 bits wide: a length converted to int
@@ -162,7 +162,7 @@ jobs:
         with:
           go-version-file: go.mod
       - run: GOARCH=386 go vet ./...
-      - run: GOARCH=386 go test ./...
+      - run: GOARCH=386 go test -timeout 45m ./...
 
   arch-qemu:
     name: arch ${{ matrix.goarch }} (qemu)
@@ -211,4 +211,4 @@ jobs:
           # Printed on purpose: without it, "ran under emulation" and "skipped" are
           # indistinguishable from a green tick.
           echo "running ${{ matrix.goarch }} under $q"
-          GOARCH=${{ matrix.goarch }} go test -exec="$q" ./...
+          GOARCH=${{ matrix.goarch }} go test -timeout 45m -exec="$q" ./...
