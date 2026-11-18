@@ -361,11 +361,12 @@ func checkSubsets(t *testing.T, rel string, segs []segment) int {
 
 // wantSlices and wantSlicesRefused are what the pinned streams hold: the slice
 // segments whose parameter sets parse, and those whose parameter sets were
-// refused for bypass alignment. Set from the first run and read against the
-// trace counts it prints.
+// refused. None is: the 56 slices of the seven streams that enable
+// cabac_bypass_alignment were refused until the alignment of 9.3.4.3.6 was
+// decoded (h265#54), and 52215 + 56 = 52271.
 const (
-	wantSlices        = 52215
-	wantSlicesRefused = 56
+	wantSlices        = 52271
+	wantSlicesRefused = 0
 )
 
 func TestFullSliceHeaderRefusals(t *testing.T) {

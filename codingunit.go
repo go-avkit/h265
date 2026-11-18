@@ -349,7 +349,7 @@ func (w *SliceWalker) pcmSamples(cu *CodingUnit) error {
 		cu.PcmChroma[i] = read(bdC)
 	}
 	w.pos = end
-	if err := w.D.Start(w.data[w.pos:], cabac.Config{}); err != nil {
+	if err := w.D.Init(w.data[w.pos:]); err != nil {
 		return fmt.Errorf("%w: after the PCM samples: %w", ErrSliceData, err)
 	}
 	return nil

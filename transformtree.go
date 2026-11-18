@@ -67,6 +67,7 @@ func (w *SliceWalker) residualTools() *ResidualTools {
 		ExplicitRDPCM:            x.ExplicitRDPCM,
 		PersistentRiceAdaptation: x.PersistentRiceAdaptation,
 		ExtendedPrecision:        x.ExtendedPrecisionProcessing,
+		BypassAlignment:          x.CabacBypassAlignment,
 		BitDepthY:                int(s.BitDepthLuma),
 		BitDepthC:                int(s.BitDepthChroma),
 	}

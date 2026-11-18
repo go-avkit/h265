@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -123,27 +122,28 @@ func TestEverySPSOfTheConformanceSuiteParses(t *testing.T) {
 			t.Errorf("%s: %v", rel, err)
 			continue
 		}
-		found, refused := 0, 0
+		found, aligned := 0, 0
 		for _, u := range units {
 			if u.Type != UnitSPS {
 				continue
 			}
 			found++
-			_, err := ParseSPS(u)
-			switch {
-			case errors.Is(err, ErrBypassAlignment):
-				refused++
-			case err != nil:
+			s, err := ParseSPS(u)
+			if err != nil {
 				t.Errorf("%s: %v", rel, err)
+			}
+			if s.Range.CabacBypassAlignment {
+				aligned++
 			}
 		}
 		if found == 0 {
 			t.Errorf("%s: no sequence parameter set", rel)
 		}
-		// Exactly the streams that enable cabac_bypass_alignment are refused,
-		// and for that reason alone.
-		if want := alignedStreams[filepath.Dir(rel)]; want != (refused > 0) {
-			t.Errorf("%s: refused for bypass alignment = %v, want %v", rel, refused > 0, want)
+		// Exactly the streams of alignedStreams enable cabac_bypass_alignment:
+		// ParseSPS returns the flag (it once refused those sets, which hid the
+		// flag from every audit that skipped a set that did not parse).
+		if want := alignedStreams[filepath.Dir(rel)]; want != (aligned > 0) {
+			t.Errorf("%s: enables bypass alignment = %v, want %v", rel, aligned > 0, want)
 		}
 		n++
 	}

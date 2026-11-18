@@ -14,11 +14,13 @@ import (
 // combination of tools: it must return, never panic, refuse only with
 // ErrResidual, and leave every level within CoeffMin..CoeffMax.
 func FuzzDecodeResidual(f *testing.F) {
-	f.Add([]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33}, uint16(0x1234), uint8(0x41))
-	f.Add([]byte{0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, uint16(0xffff), uint8(0xff))
-	f.Add([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8}, uint16(0), uint8(0))
-	f.Fuzz(func(t *testing.T, data []byte, toolBits uint16, shape uint8) {
+	f.Add([]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33}, uint16(0x1234), uint8(0x41), false)
+	f.Add([]byte{0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, uint16(0xffff), uint8(0xff), true)
+	f.Add([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8}, uint16(0), uint8(0), true)
+	f.Add([]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33}, uint16(0x1234), uint8(0x41), true)
+	f.Fuzz(func(t *testing.T, data []byte, toolBits uint16, shape uint8, align bool) {
 		tools := &ResidualTools{
+			BypassAlignment: align,
 			ChromaArrayType: 1 + int(toolBits&1)*2, SignDataHiding: toolBits&2 != 0, TransformSkip: toolBits&4 != 0,
 			Log2MaxTransformSkipSize: 2 + int(toolBits>>3&3), TransformSkipContext: toolBits&32 != 0,
 			ImplicitRDPCM: toolBits&64 != 0, ExplicitRDPCM: toolBits&128 != 0, PersistentRiceAdaptation: toolBits&256 != 0,

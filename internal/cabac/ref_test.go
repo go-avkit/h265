@@ -95,6 +95,16 @@ func (r *refDecoder) bypassBits(k int) uint32 {
 	return v
 }
 
+// align is 9.3.4.3.6; ok is false when the stream would then break the shall of
+// 9.3.4.3.4 (the first bypass bin leaves ivlOffset at or above ivlCurrRange).
+func (r *refDecoder) align() (ok bool) {
+	if r.off >= 256 {
+		return false
+	}
+	r.rng = 256
+	return true
+}
+
 func (r *refDecoder) terminate() int { // 9.3.4.3.5
 	r.rng -= 2
 	if r.off >= r.rng {

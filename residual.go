@@ -53,6 +53,8 @@ type ResidualTools struct {
 	ExplicitRDPCM            bool
 	PersistentRiceAdaptation bool
 	ExtendedPrecision        bool
+	// BypassAlignment is cabac_bypass_alignment_enabled_flag.
+	BypassAlignment bool
 	// BitDepthY and BitDepthC give CoeffMinY, CoeffMaxY and the C pair
 	// (7-27 to 7-30): 15 bits, or Max( 15, BitDepth + 6 ) when
 	// extended_precision_processing_flag is set.
@@ -239,6 +241,10 @@ func DecodeResidual(d *cabac.Decoder, m *cabac.Model, t *ResidualTools, in Resid
 		var greater1, greater2 [16]bool
 		lastGreater1Idx := -1 // index into sigN of lastGreater1ScanPos
 		numG1 := min(nSig, 8)
+		// escapeDataPresent (7.3.8.11): a coefficient past the eighth, a second
+		// greater1 flag set, or a greater2 flag set, each of which has a
+		// coeff_abs_level_remaining[ ] to follow.
+		escapeDataPresent := nSig > numG1
 		for k := 0; k < numG1; k++ {
 			inc := ctxSet*4 + min(3, g1)
 			if !luma {
@@ -248,6 +254,8 @@ func DecodeResidual(d *cabac.Decoder, m *cabac.Model, t *ResidualTools, in Resid
 			greater1[k] = f
 			if f && lastGreater1Idx == -1 {
 				lastGreater1Idx = k
+			} else if f {
+				escapeDataPresent = true
 			}
 			if g1 > 0 {
 				if f {
@@ -264,6 +272,7 @@ func DecodeResidual(d *cabac.Decoder, m *cabac.Model, t *ResidualTools, in Resid
 				inc += 4
 			}
 			greater2[lastGreater1Idx] = d.Decision(&m.Ctx[cabac.CtxCoeffAbsGreater2+inc]) == 1
+			escapeDataPresent = escapeDataPresent || greater2[lastGreater1Idx]
 		}
 
 		firstSig, lastSig := sigN[nSig-1], sigN[0]
@@ -277,6 +286,17 @@ func DecodeResidual(d *cabac.Decoder, m *cabac.Model, t *ResidualTools, in Resid
 		nSigns := nSig
 		if hide {
 			nSigns--
+		}
+		// 9.3.1: with cabac_bypass_alignment_enabled_flag, the sign flags and
+		// the coeff_abs_level_remaining[ ] of a sub-block with escapeDataPresent
+		// are decoded after the alignment of 9.3.4.3.6. ivlCurrRange stays 256
+		// through bypass bins, so one alignment before the first sign flag (the
+		// first of the requests; escape data implies a sign flag is coded)
+		// covers them all.
+		if t.BypassAlignment && escapeDataPresent {
+			if err := d.Align(); err != nil {
+				return fmt.Errorf("%w: %w", ErrResidual, err)
+			}
 		}
 		signs := d.BypassBits(uint(nSigns)) // first flag is the top bit
 

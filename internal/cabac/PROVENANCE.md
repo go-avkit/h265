@@ -66,12 +66,15 @@ decoder; that comparison (FFmpeg, libde265) comes with the slice-data PR.
 
 ## Scope and open points
 
-* `cabac_bypass_alignment_enabled_flag` (9.3.4.3.6, ivlCurrRange set to 256) is
-  refused: `Start` returns `ErrBypassAlignment` when told the flag is set
-  (ParseSPS does not yet read sps_range_extension; go-avkit/h265#32). It changes ivlCurrRange without touching ivlOffset, and
-  whether ivlOffset then stays below it is a property of the encoder that the
-  one-division bypass run would have to be told about. It belongs to the high
-  throughput profiles, outside the design's target.
+* `cabac_bypass_alignment_enabled_flag`: `Align` is 9.3.4.3.6 (ivlCurrRange set
+  to 256), which the residual coding calls before the sign flags and
+  coeff_abs_level_remaining of a sub-block with escapeDataPresent (9.3.1,
+  7.3.8.11). It changes ivlCurrRange without touching ivlOffset; a stream whose
+  ivlOffset is 256 or more at that point would break the shall of 9.3.4.3.4
+  with its first bypass bin, so `Align` returns `ErrAlignment` for it, which
+  keeps ivlOffset < ivlCurrRange and the one-division bypass run exact. Tested
+  against the bit-serial reference (`TestAlignAgainstBitSerialReference`) and by
+  the seven conformance streams that enable the flag (h265#54).
 * A stream whose first nine bits are 510 or 511 is refused (9.3.2.6 forbids
   it); everything after follows from that.
 * Data that ends early reads as zero bits, and `Overrun` says so.

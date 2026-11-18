@@ -31,15 +31,15 @@ pics, err := d.Flush()
 ```
 
 Every hashed picture of the conformance suite that it decodes (intra and inter,
-7147 of them) matches its decoded picture hash SEI; 21 streams use
-`cabac_bypass_alignment_enabled_flag`, which it refuses. Limits (`Limits`) bound the
+7178 of them) matches its decoded picture hash SEI, including the 7 streams that use
+`cabac_bypass_alignment_enabled_flag` (the alignment of 9.3.4.3.6). Limits (`Limits`) bound the
 picture size and the memory of the picture buffer; a fuzz target covers the whole
 decoder. Speed is below. CI pins these counts. The streams that carry no
 hash SEI are held to the md5 of their decoded output (output order, cropped, as a
 yuv file) that the suite ships: 45 of the 52 such streams it decodes match; the other
 7 ship no md5 file, so nothing verifies them. What it has:
 
-- the CABAC engine and the full slice-data syntax (7.3.8): all 52215 slices of
+- the CABAC engine and the full slice-data syntax (7.3.8): all 52271 slices of
   the conformance suite (v1 and RExt) walk to their last bit;
 - QP, scaling lists, dequantisation and inverse transforms (8.6);
 - intra prediction and picture construction (8.4, 8.6.7), with deblocking
