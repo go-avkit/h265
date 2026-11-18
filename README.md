@@ -34,7 +34,9 @@ Every hashed picture of the conformance suite that it decodes (intra and inter,
 7178 of them) matches its decoded picture hash SEI, including the 7 streams that use
 `cabac_bypass_alignment_enabled_flag` (the alignment of 9.3.4.3.6). Limits (`Limits`) bound the
 picture size and the memory of the picture buffer; a fuzz target covers the whole
-decoder. Speed is below. CI pins these counts. The streams that carry no
+decoder. Speed is below. CI pins these counts. The 9 MV-HEVC conformance streams
+(675 units of layers 1 to 5) decode their base layer to the md5 the suite ships,
+the other layers' units being skipped. The streams that carry no
 hash SEI are held to the md5 of their decoded output (output order, cropped, as a
 yuv file) that the suite ships: 45 of the 52 such streams it decodes match; the other
 7 ship no md5 file, so nothing verifies them. What it has:
