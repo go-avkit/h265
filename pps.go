@@ -294,9 +294,10 @@ func (p PPS) Validate(s SPS) error {
 }
 
 // readExtensions reads pps_extension_present_flag and the range extension. The
-// multilayer, 3D and screen content coding extensions are refused rather than
-// skipped, as for the SPS. extData says pps_extension_4bits announced data
-// that is ignored.
+// multilayer and 3D extensions that follow it are ignored (the base layer's
+// decoding does not use them); the screen content coding extension changes the
+// decoding and is refused. extData says what follows the range extension is
+// ignored: pps_extension_4bits announced data, or a multilayer or 3D extension.
 func (p *PPS) readExtensions(r *sticky) (extData bool, err error) {
 	p.Range.Log2MaxTransformSkipSize = 2
 	if !r.flag() { // pps_extension_present_flag
@@ -307,8 +308,16 @@ func (p *PPS) readExtensions(r *sticky) (extData bool, err error) {
 	if r.err != nil {
 		return false, r.err
 	}
-	if multilayer || ext3D || scc {
-		return false, fmt.Errorf("%w: a multilayer, 3D or screen content coding extension", ErrUnsupportedPPS)
+	if scc {
+		return false, fmt.Errorf("%w: a screen content coding extension", ErrUnsupportedPPS)
+	}
+	// The multilayer (Annex F) and 3D (Annex I) extensions follow the range
+	// extension and say nothing the base layer's decoding process (clause 8) uses:
+	// the MV-HEVC conformance streams carry one in the PPS of layer 0. What follows
+	// the range extension is therefore ignored, like pps_extension_data_flag, and
+	// the stop bit is not looked for.
+	if multilayer || ext3D {
+		extData = true
 	}
 	if !rangeExt {
 		return extData, nil

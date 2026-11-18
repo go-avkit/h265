@@ -92,11 +92,35 @@ func TestPPSOtherExtensions(t *testing.T) {
 	if _, err := ParsePPS(pset{ext: func(w *writer) { w.bits(0, 4); w.bits(0, 4) }}.build()); err != nil {
 		t.Errorf("an extension block with nothing in it: %v", err)
 	}
-	for name, flags := range map[string]uint32{"multilayer": 0b0100, "3D": 0b0010, "screen content": 0b0001} {
+	// The multilayer and 3D extensions follow the range extension and are ignored,
+	// with whatever bytes they bring: the MV-HEVC streams carry one in the PPS of
+	// layer 0. Screen content coding changes the decoding and is refused, with or
+	// without a multilayer extension before it (whose length is not known here).
+	for name, flags := range map[string]uint32{"multilayer": 0b0100, "3D": 0b0010, "both": 0b0110} {
+		u := pset{ext: func(w *writer) { w.bits(flags, 4); w.bits(0, 4); w.bits(0x5A5A, 16) }}.build()
+		if _, err := ParsePPS(u); err != nil {
+			t.Errorf("%s extension: %v", name, err)
+		}
+	}
+	for name, flags := range map[string]uint32{"screen content": 0b0001, "multilayer and screen content": 0b0101} {
 		u := pset{ext: func(w *writer) { w.bits(flags, 4); w.bits(0, 4) }}.build()
 		if _, err := ParsePPS(u); !errors.Is(err, ErrUnsupportedPPS) {
 			t.Errorf("%s extension: %v", name, err)
 		}
+	}
+	// The range extension before a multilayer one is still read.
+	p, err := ParsePPS(pset{transformSkip: true, ext: func(w *writer) {
+		w.bits(0b1100, 4)
+		w.bits(0, 4)
+		w.ue(3)  // log2_max_transform_skip_block_size_minus2
+		w.bit(0) // cross_component_prediction_enabled_flag
+		w.bit(0) // chroma_qp_offset_list_enabled_flag
+		w.ue(0)
+		w.ue(0)
+		w.bits(0xC3, 8) // pps_multilayer_extension( ), not read
+	}}.build())
+	if err != nil || p.Range.Log2MaxTransformSkipSize != 5 {
+		t.Errorf("range then multilayer extension: %v, %+v", err, p.Range)
 	}
 }
 
