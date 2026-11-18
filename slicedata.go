@@ -212,7 +212,7 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 			} else {
 				w.lastQpY = ps.lastQpY
 			}
-			if err := w.D.Start(data[w.pos:], cabac.Config{}); err != nil {
+			if err := w.D.Init(data[w.pos:]); err != nil {
 				return fmt.Errorf("%w: %w", ErrSliceData, err)
 			}
 			first = false

@@ -84,6 +84,10 @@ func (e *Encoder) Bypass(bin int) {
 	}
 }
 
+// Align is the alignment of 9.3.5.5 prior to the aligned bypass bins: ivlCurrRange
+// is set to 256 (ivlLow is not touched, so the interval only shrinks).
+func (e *Encoder) Align() { e.rng = 256 }
+
 // BypassBits writes the k low bits of v as bypass bins, the most significant
 // first.
 func (e *Encoder) BypassBits(v uint32, k int) {

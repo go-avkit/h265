@@ -17,11 +17,6 @@ var (
 	// ErrUnsupportedSPS means the set states something this reader does not
 	// follow.
 	ErrUnsupportedSPS = errors.New("h265: unsupported sequence parameter set")
-	// ErrBypassAlignment means the set enables cabac_bypass_alignment_enabled_flag
-	// (9.3.4.3.6), which Annex A requires in High Throughput 4:4:4 16 Intra and
-	// which this decoder does not implement. It is returned together with
-	// ErrUnsupportedSPS.
-	ErrBypassAlignment = errors.New("h265: cabac_bypass_alignment_enabled_flag is not supported")
 )
 
 // SPS is what a sequence parameter set says about the pictures that follow.
@@ -347,8 +342,9 @@ type RangeExtension struct {
 	IntraSmoothingDisabled      bool
 	HighPrecisionOffsets        bool
 	PersistentRiceAdaptation    bool
-	// CabacBypassAlignment is cabac_bypass_alignment_enabled_flag, which the
-	// CABAC engine refuses (internal/cabac.ErrBypassAlignment).
+	// CabacBypassAlignment is cabac_bypass_alignment_enabled_flag: the
+	// alignment of 9.3.4.3.6 precedes the bypass bins of a sub-block with escape
+	// data (residual coding).
 	CabacBypassAlignment bool
 }
 
@@ -378,12 +374,6 @@ func (s *SPS) readExtensions(r *sticky) (extData bool, err error) {
 			HighPrecisionOffsets:        r.flag(),
 			PersistentRiceAdaptation:    r.flag(),
 			CabacBypassAlignment:        r.flag(),
-		}
-		// The CABAC engine cannot decode aligned bypass bins exactly
-		// (internal/cabac.ErrBypassAlignment): refused here, where the flag is
-		// read, until slice data is wired to cabac.Config.
-		if s.Range.CabacBypassAlignment {
-			return false, fmt.Errorf("%w: %w", ErrUnsupportedSPS, ErrBypassAlignment)
 		}
 	}
 	if multilayer {

@@ -127,14 +127,13 @@ func TestSPSRangeExtension(t *testing.T) {
 	if got.Range != want {
 		t.Errorf("Range = %+v, want %+v", got.Range, want)
 	}
-	// cabac_bypass_alignment_enabled_flag is refused at parse time, with a typed
-	// error that is also an ErrUnsupportedSPS.
+	// cabac_bypass_alignment_enabled_flag is read, not refused (9.3.4.3.6).
 	s.ext = rangeExt(false, false, false, false, false, false, false, false, true)
-	if _, err := ParseSPS(s.build()); !errors.Is(err, ErrBypassAlignment) || !errors.Is(err, ErrUnsupportedSPS) {
-		t.Errorf("bypass alignment: err = %v, want ErrBypassAlignment and ErrUnsupportedSPS", err)
+	if got, err := ParseSPS(s.build()); err != nil || got.Range != (RangeExtension{CabacBypassAlignment: true}) {
+		t.Errorf("bypass alignment: Range = %+v, err = %v", got.Range, err)
 	}
 	// Every other flag in its own position.
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 9; i++ {
 		flags := make([]bool, 9)
 		flags[i] = true
 		s.ext = rangeExt(flags...)
@@ -145,7 +144,7 @@ func TestSPSRangeExtension(t *testing.T) {
 		r := got.Range
 		set := []bool{r.TransformSkipRotation, r.TransformSkipContext, r.ImplicitRDPCM, r.ExplicitRDPCM,
 			r.ExtendedPrecisionProcessing, r.IntraSmoothingDisabled, r.HighPrecisionOffsets,
-			r.PersistentRiceAdaptation}
+			r.PersistentRiceAdaptation, r.CabacBypassAlignment}
 		for j, v := range set {
 			if v != (j == i) {
 				t.Errorf("flag %d set: field %d is %v", i, j, v)

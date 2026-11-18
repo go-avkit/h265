@@ -178,13 +178,64 @@ func TestEveryFirstOffsetAndEveryContext(t *testing.T) {
 	}
 }
 
-func TestStartRefusesBypassAlignment(t *testing.T) {
-	var d Decoder
-	if err := d.Start([]byte{0, 0, 0}, Config{BypassAlignment: true}); err != ErrBypassAlignment {
-		t.Errorf("Start with alignment: %v", err)
+// align applies 9.3.4.3.6 to the pair: both refuse together, and agree after.
+func (p *pair) align() bool {
+	p.t.Helper()
+	errD, okR := p.d.Align(), p.r.align()
+	if (errD == nil) != okR {
+		p.t.Fatalf("Align: %v, reference ok=%v, ivlOffset %d", errD, okR, p.r.off)
 	}
-	if err := d.Start([]byte{0, 0, 0}, Config{}); err != nil {
-		t.Errorf("Start without: %v", err)
+	if errD != nil && errD != ErrAlignment {
+		p.t.Fatalf("Align: %v, want ErrAlignment", errD)
+	}
+	if okR {
+		p.agree("align")
+	}
+	return okR
+}
+
+// TestAlignAgainstBitSerialReference aligns at random points of random runs and
+// then decodes bypass bins (single and in runs) and decisions: every ivlOffset,
+// ivlCurrRange, bit pointer and context must equal the reference's. Aligned
+// bypass runs rely on ivlOffset < 256, which Align enforces.
+func TestAlignAgainstBitSerialReference(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 8))
+	aligned, refused := 0, 0
+	for iter := 0; iter < 4000; iter++ {
+		data := randomData(rng, 1+rng.IntN(90))
+		p := newPair(t, data, rng)
+		if p == nil {
+			continue
+		}
+		for step := 0; step < 40; step++ {
+			p.randomOps(rng, 1+rng.IntN(6))
+			if !p.align() {
+				refused++
+				break
+			}
+			aligned++
+			for i := rng.IntN(8); i > 0; i-- {
+				if rng.IntN(2) == 0 {
+					p.bypass()
+				} else {
+					p.bypassBits(uint(rng.IntN(33)))
+				}
+			}
+		}
+	}
+	if aligned == 0 || refused == 0 {
+		t.Fatalf("%d alignments, %d refused: the test must reach both", aligned, refused)
+	}
+}
+
+func TestAlignRefusesAnOffsetOf256OrMore(t *testing.T) {
+	// The first nine bits are ivlOffset: 255 aligns, 256 does not.
+	var d Decoder
+	if err := d.Init([]byte{0x7F, 0x80, 0}); err != nil || d.Align() != nil || d.rng != 256 {
+		t.Errorf("offset 255: Align must succeed and set the range to 256")
+	}
+	if err := d.Init([]byte{0x80, 0x00, 0}); err != nil || d.Align() != ErrAlignment {
+		t.Errorf("offset 256: Align must return ErrAlignment")
 	}
 }
 

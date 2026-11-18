@@ -358,7 +358,7 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 		}
 		// A PPS may precede the SPS it names (RPS_C and VPSSPSPPS_A send them in
 		// other orders), so the sequence sets of the whole stream are gathered
-		// first; an SPS refused for bypass alignment is not among them.
+		// first.
 		spsByID := map[uint32]SPS{}
 		for _, u := range units {
 			if u.Type == UnitSPS {
@@ -382,10 +382,8 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 					if err := pps.Validate(s); err != nil {
 						t.Errorf("%s: %v", rel, err)
 					}
-				} else if !alignedStreams[filepath.Dir(rel)] {
-					// Only a stream whose SPS is refused for bypass alignment may
-					// have a PPS that cannot be validated.
-					t.Errorf("%s: a PPS names SPS %d, which is not there, in a stream that does not enable bypass alignment", rel, pps.SPSID)
+				} else {
+					t.Errorf("%s: a PPS names SPS %d, which is not there", rel, pps.SPSID)
 				}
 			}
 		}
@@ -393,8 +391,7 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 	if n != wantPPSSets {
 		t.Fatalf("%d picture parameter sets in the suite, want %d", n, wantPPSSets)
 	}
-	// A PPS whose SPS was refused (bypass alignment) is parsed but cannot be
-	// validated: the number that were is asserted too, not only the number parsed.
+	// The number validated is asserted too, not only the number parsed.
 	if validated != wantPPSValidated {
 		t.Fatalf("%d picture parameter sets validated, want %d", validated, wantPPSValidated)
 	}
@@ -405,10 +402,10 @@ func TestEveryPPSOfTheConformanceSuiteParses(t *testing.T) {
 // streams hold (counted when the manifests were written).
 const wantPPSSets = 1310
 
-// wantPPSValidated is how many of them name an SPS that parsed (the streams that
-// enable cabac_bypass_alignment have a refused SPS: 29 sets, each in a stream of
-// alignedStreams, which the test checks).
-const wantPPSValidated = 1281
+// wantPPSValidated is how many of them name an SPS that parsed: all (the 29 sets
+// of the streams of alignedStreams named a refused SPS until the alignment of
+// 9.3.4.3.6 was decoded, h265#54).
+const wantPPSValidated = 1310
 
 // wideUE writes an Exp-Golomb code of n leading zeros by hand: writer.ue cannot
 // reach 2^32-1, which is the value a +1 wraps on.

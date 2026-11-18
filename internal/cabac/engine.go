@@ -53,27 +53,25 @@ type Decoder struct {
 	rng  uint32 // ivlCurrRange, 256..510 between bins
 }
 
-// ErrBypassAlignment is returned by Start when cabac_bypass_alignment_enabled_flag
-// is set: the alignment of 9.3.4.3.6 (ivlCurrRange forced to 256) can leave
-// ivlOffset at or above ivlCurrRange, which the one-division bypass run does not
-// allow for, so the stream is refused rather than decoded wrongly. The flag must
-// be 1 in the High Throughput 4:4:4 16 Intra profile of Annex A.
-var ErrBypassAlignment = errors.New("cabac: cabac_bypass_alignment_enabled_flag is not supported")
+// ErrAlignment is returned by Align when ivlOffset is 256 or more: with
+// ivlCurrRange set to 256 the first bypass bin would leave ivlOffset at or above
+// ivlCurrRange, which 9.3.4.3.4 forbids ("The bitstream shall not contain data
+// that result in a value of ivlOffset being greater than or equal to
+// ivlCurrRange upon completion of this process"). Refusing it here keeps the
+// invariant ivlOffset < ivlCurrRange that the one-division bypass run relies on.
+var ErrAlignment = errors.New("cabac: ivlOffset is 256 or more at the alignment of bypass decoding")
 
-// Config is what the SPS tells the engine about the entropy coding.
-type Config struct {
-	// BypassAlignment is cabac_bypass_alignment_enabled_flag
-	// (sps_range_extension).
-	BypassAlignment bool
-}
-
-// Start is Init for a stream whose SPS says how the entropy coding is set up:
-// it refuses what the engine cannot decode exactly.
-func (d *Decoder) Start(data []byte, cfg Config) error {
-	if cfg.BypassAlignment {
-		return ErrBypassAlignment
+// Align is the alignment process prior to aligned bypass decoding, clause
+// 9.3.4.3.6: ivlCurrRange is set equal to 256. The caller invokes it when
+// cabac_bypass_alignment_enabled_flag is 1 and the request is for
+// coeff_abs_level_remaining[ ] or coeff_sign_flag[ ] with escapeDataPresent equal
+// to 1 (9.3.1); it is idempotent, since bypass bins leave ivlCurrRange alone.
+func (d *Decoder) Align() error {
+	if d.val>>d.n >= 256 {
+		return ErrAlignment
 	}
-	return d.Init(data)
+	d.rng = 256
+	return nil
 }
 
 // Init is the initialisation of the arithmetic decoding engine, clause 9.3.2.6:

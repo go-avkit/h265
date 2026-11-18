@@ -341,6 +341,18 @@ func (w *resWriter) write(in ResidualInput, b *rBlock) {
 			hidden = false
 		}
 		hide := t.SignDataHiding && hidden
+		// escapeDataPresent (7.3.8.11), read off the levels: more than eight
+		// coefficients, a second greater1 flag set, or a greater2 flag set.
+		escape, nG1 := len(sigN) > 8, 0
+		for k := 0; k < min(len(sigN), 8); k++ {
+			if abs(sigN[k]) > 1 {
+				nG1++
+			}
+		}
+		escape = escape || nG1 > 1 || (lastG1Idx != -1 && abs(sigN[lastG1Idx]) > 2)
+		if t.BypassAlignment && escape {
+			w.e.Align() // 9.3.5.5: ivlCurrRange is set to 256 before the aligned bins
+		}
 		if hide { // the sign of the first coefficient is what the parity of the sum says
 			sum := 0
 			for _, n := range sigN {
@@ -450,6 +462,7 @@ func randomTools(rng *rand.Rand) *ResidualTools {
 		TransformSkipContext: rng.IntN(3) == 0, ImplicitRDPCM: rng.IntN(2) == 0, ExplicitRDPCM: rng.IntN(2) == 0,
 		PersistentRiceAdaptation: rng.IntN(2) == 0, ExtendedPrecision: rng.IntN(4) == 0,
 		BitDepthY: 8 + rng.IntN(9), BitDepthC: 8 + rng.IntN(9),
+		BypassAlignment: rng.IntN(3) == 0,
 	}
 	return t
 }
