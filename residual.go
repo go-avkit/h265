@@ -103,6 +103,29 @@ func ScanIdx(in ResidualInput, chromaArrayType int) int {
 // maxSubBlocks is the 8x8 grid of 4x4 sub-blocks of a 32x32 block.
 const maxSubBlocks = 8
 
+// escapeDataPresent is the variable of 7.3.8.11 for a sub-block of nSig
+// significant coefficients: a coefficient past the eighth (it has no greater1
+// flag), a second greater1 flag set, or a greater2 flag set, each of which has a
+// coeff_abs_level_remaining[ ] to follow.
+//
+// It stays a call: it runs only for streams with cabac_bypass_alignment_enabled_flag,
+// and inlined it would add its loop to the body of DecodeResidual for every stream.
+//
+//go:noinline
+func escapeDataPresent(nSig int, greater1, greater2 *[16]bool) bool {
+	if nSig > 8 {
+		return true
+	}
+	seen := false
+	for k := 0; k < nSig; k++ {
+		if greater2[k] || (greater1[k] && seen) {
+			return true
+		}
+		seen = seen || greater1[k]
+	}
+	return false
+}
+
 // DecodeResidual is residual_coding( x0, y0, log2TrafoSize, cIdx ), 7.3.8.11,
 // with the context selection of 9.3.4.2.3 to 9.3.4.2.7, from the arithmetic
 // decoder d and the context variables m. out.Levels must hold 1 << (2*Log2Size)
@@ -241,10 +264,6 @@ func DecodeResidual(d *cabac.Decoder, m *cabac.Model, t *ResidualTools, in Resid
 		var greater1, greater2 [16]bool
 		lastGreater1Idx := -1 // index into sigN of lastGreater1ScanPos
 		numG1 := min(nSig, 8)
-		// escapeDataPresent (7.3.8.11): a coefficient past the eighth, a second
-		// greater1 flag set, or a greater2 flag set, each of which has a
-		// coeff_abs_level_remaining[ ] to follow.
-		escapeDataPresent := nSig > numG1
 		for k := 0; k < numG1; k++ {
 			inc := ctxSet*4 + min(3, g1)
 			if !luma {
@@ -254,8 +273,6 @@ func DecodeResidual(d *cabac.Decoder, m *cabac.Model, t *ResidualTools, in Resid
 			greater1[k] = f
 			if f && lastGreater1Idx == -1 {
 				lastGreater1Idx = k
-			} else if f {
-				escapeDataPresent = true
 			}
 			if g1 > 0 {
 				if f {
@@ -272,7 +289,6 @@ func DecodeResidual(d *cabac.Decoder, m *cabac.Model, t *ResidualTools, in Resid
 				inc += 4
 			}
 			greater2[lastGreater1Idx] = d.Decision(&m.Ctx[cabac.CtxCoeffAbsGreater2+inc]) == 1
-			escapeDataPresent = escapeDataPresent || greater2[lastGreater1Idx]
 		}
 
 		firstSig, lastSig := sigN[nSig-1], sigN[0]
@@ -293,7 +309,9 @@ func DecodeResidual(d *cabac.Decoder, m *cabac.Model, t *ResidualTools, in Resid
 		// through bypass bins, so one alignment before the first sign flag (the
 		// first of the requests; escape data implies a sign flag is coded)
 		// covers them all.
-		if t.BypassAlignment && escapeDataPresent {
+		// escapeDataPresent is worked out from the flags only here, when the flag is
+		// set, so that the decoding of a stream without it carries none of it.
+		if t.BypassAlignment && escapeDataPresent(nSig, &greater1, &greater2) {
 			if err := d.Align(); err != nil {
 				return fmt.Errorf("%w: %w", ErrResidual, err)
 			}
