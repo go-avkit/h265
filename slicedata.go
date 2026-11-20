@@ -70,6 +70,9 @@ type PictureState struct {
 	// the last coding unit decoded, which a dependent slice segment continues from.
 	QpY     []int8
 	lastQpY int32
+	// motion, when set (Options.RecyclePictures), supplies Motion and takes it back when the
+	// decoded picture buffer lets go of the picture.
+	motion *motionPool
 
 	wpp, ds cabac.Model
 }
@@ -163,7 +166,7 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 	sps, l := ps.SPS, ps.Layout
 	w := &SliceWalker{Pic: ps, SPS: sps, PPS: pps, Hdr: hdr, cu: cu, chroma: int(chromaArrayType(sps))}
 	if ps.Inter != nil && ps.Motion == nil {
-		ps.Motion = make([]Motion, len(ps.EdgeV))
+		ps.Motion = ps.motion.get(len(ps.EdgeV))
 	}
 	unesc := u.Unescape()
 	if hdr.DataOffset < 0 || hdr.DataOffset > len(unesc) {

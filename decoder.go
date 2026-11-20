@@ -45,6 +45,13 @@ type Options struct {
 	// VerifyHash compares each decoded picture with its decoded picture hash SEI message
 	// when it has one (ErrHashMismatch on a difference).
 	VerifyHash bool
+	// RecyclePictures lets the decoder reuse the planes of pictures the caller has given
+	// back with DecodedPicture.Release, instead of allocating every picture afresh (which at
+	// 1080p costs about 1500 page faults a frame). Off by default: without it nothing changes
+	// and an Output picture stays valid for as long as it is referenced (see Output). With it,
+	// a picture that is not released is still never reused; a released one is, once the
+	// decoder no longer needs it as a reference, so the caller must not read it after Release.
+	RecyclePictures bool
 }
 
 // Output is a picture the decoder outputs: cut to the conformance window, in output
@@ -58,6 +65,11 @@ type Options struct {
 // memory the decoder reads as a reference picture for later ones. The caller must therefore
 // treat the planes as read-only: writing to them changes the pictures predicted from this
 // one. Call Picture.Clone first to get a copy that can be modified.
+//
+// That is the default. With Options.RecyclePictures a caller may give a picture back with
+// Picture.Release, after which its planes are the decoder's again (reused once the decoder no
+// longer needs the picture as a reference) and Picture is empty; a picture that is not
+// released keeps the lifetime above.
 //
 // Behaviour change (the release that made planes views): output planes used to be copies the
 // caller could write to; callers that modify them must Clone the picture first.
@@ -101,6 +113,9 @@ type Decoder struct {
 	out     []Output
 	errs    []error
 	stats   DecoderStats
+	// pool is the pool of pictures when Options.RecyclePictures is on, else nil.
+	pool   *picPool
+	motion *motionPool
 }
 
 type decPicture struct {
@@ -131,6 +146,18 @@ func NewDecoder(opt Options) *Decoder {
 	d := &Decoder{opt: opt, spsM: map[uint32]SPS{}, ppsM: map[uint32]PPS{}, layouts: map[[2]int]*CtbLayout{}}
 	d.dpb.Output = func(p *DPBPicture) {
 		d.out = append(d.out, Output{Picture: p.Frame.Crop(p.SPS), POC: p.POC, Tag: p.Tag, Corrupt: p.Corrupt})
+	}
+	if opt.RecyclePictures {
+		d.pool, d.motion = newPicPool(), &motionPool{}
+		d.dpb.Drop = func(p *DPBPicture) {
+			if r := p.Frame.rec; r != nil {
+				r.pool.drop(r)
+			}
+			if st := p.State; st != nil && st.motion != nil {
+				st.motion.put(st.Motion)
+				st.Motion = nil
+			}
+		}
 	}
 	return d
 }
@@ -372,13 +399,23 @@ func (d *Decoder) begin(u Unit, h SliceHeader, sps SPS, pps PPS) bool {
 	in := PictureInfo{Type: u.Type, TemporalID: u.TemporalID, POC: poc.Value, Set: set, SPS: sps,
 		NoOutputOfPriorPics: h.NoOutputOfPriorPics, PicOutput: h.PicOutput, NoRaslOutput: noRasl, First: isFirst}
 	rp, err := d.dpb.Begin(in)
-	d.cur = &decPicture{state: NewPictureState(sps, l), frame: NewDecodedPicture(sps), sps: sps, pps: pps,
+	d.cur = &decPicture{state: NewPictureState(sps, l), frame: d.newFrame(sps), sps: sps, pps: pps,
 		poc: poc.Value, set: set, rp: rp, output: h.PicOutput, tid: u.TemporalID, intra: true, tag: u.Tag}
+	d.cur.state.motion = d.motion
 	if err != nil {
 		d.cur.failed = true
 		d.fail(fmt.Errorf("%w: POC %d: %w", ErrCorruptPicture, poc.Value, err))
 	}
 	return true
+}
+
+// newFrame is the picture the next one is decoded into: from the pool of recycled pictures
+// when the option is on, else a new allocation.
+func (d *Decoder) newFrame(sps SPS) *DecodedPicture {
+	if d.pool != nil {
+		return d.pool.alloc(sps)
+	}
+	return NewDecodedPicture(sps)
 }
 
 // interSlice makes the InterSlice of a P or B slice: the reference lists of 8.3.4 with
