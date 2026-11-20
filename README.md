@@ -59,6 +59,29 @@ caller can set `Unit.Tag` (a uint64); the picture whose first slice segment came
 a tagged unit carries it in `Output.Tag`, whatever the output order, which carries a
 container timestamp through reordering, skipped RASL pictures and refused pictures.
 
+### New: picture reuse (`Options.RecyclePictures`, `(*DecodedPicture).Release`)
+
+Additive, off by default: a caller that does not set the option sees no change, and every
+output picture keeps the lifetime stated at `Output`. Every picture is otherwise a fresh
+allocation that the operating system faults in (about 1400 page faults a frame at 1080p).
+With `RecyclePictures` a caller that is done with an output picture calls `Release()`; its
+planes go back to a pool once the decoder no longer needs the picture as a reference (a
+`Release` while it is still in the buffer defers the reuse), and the next picture is decoded
+into them. A picture that is not released is never reused, a second `Release` does nothing,
+a released picture is empty (`At` reads 0), and `Release` without the option, or on a
+`Clone`, does nothing at all. The caller must not read a plane slice it took before
+`Release`. The motion fields of pictures are reused too, whatever the caller releases. The
+output is unchanged: the md5 of all 196 conformance streams equals the plain decode's with
+the option on. `h265.Decoder` alone, Zen 4 (`taskset -c 5`, 15 interleaved rounds, an A/A
+control: the two option-off arms differ by 0.0 to 0.4 %), option off against on:
+
+| stream | off, fps | on, fps | page faults per frame, off to on |
+|---|---|---|---|
+| alien-main | 104.2 | 113.9 (+9 %) | 1380 to 316 |
+| fade-main | 93.3 | 101.2 (+8 %) | 1540 to 422 |
+| alien-main10 | 89.2 | 100.3 (+12 %) | 1882 to 357 |
+| alien8 | 121.3 | 124.9 (+3 %) | 883 to 256 |
+
 ### Speed
 
 **Behaviour change in v0.22.0:** an 8-bit picture is decoded natively into bytes, and
@@ -128,7 +151,7 @@ of the decoder it would replace, stages, kernels, conformance, target).
 | `ParseSPS`, `ParsePPS` | the parameter sets |
 | `ParseSliceSegmentHeader`, `SliceSegmentHeader`, `SliceType` | the slice segment header |
 | `SplitPictures`, `Picture` | coded pictures, from `first_slice_segment_in_pic_flag` |
-| `NewDecoder`, `Decoder`, `Options`, `Limits`, `Output` | the decoder: units in, cropped pictures out in output order (read-only views of the decoder's pictures, each its own allocation that stays valid and unchanged for as long as it is kept; see `Output`; `Picture.Clone` gives a writable copy; a `Unit.Tag` comes back as the `Output.Tag` of the picture whose first slice segment carried it; `Output.Corrupt` flags a picture that could not be decoded to its end), with bounds on picture size and buffer memory and an optional check of each picture against its hash SEI |
+| `NewDecoder`, `Decoder`, `Options`, `Limits`, `Output` | the decoder: units in, cropped pictures out in output order (read-only views of the decoder's pictures, each its own allocation that stays valid and unchanged for as long as it is kept; see `Output`; `Picture.Clone` gives a writable copy; a `Unit.Tag` comes back as the `Output.Tag` of the picture whose first slice segment carried it; `Output.Corrupt` flags a picture that could not be decoded to its end), with bounds on picture size and buffer memory, an optional reuse of released pictures (`Options.RecyclePictures`, `Picture.Release`) and an optional check of each picture against its hash SEI |
 | `POCCounter`, `POC` | picture order counts, clause 8.3.1 |
 | `ShortTermRPS`, `RefPic`, `LongTermRefPic` | the reference picture sets a sequence carries |
 | `ReferencesOf`, `PictureRefs`, `LongTermRef` | what one coded picture says it still needs |

@@ -76,7 +76,23 @@ type RefPics struct {
 // outputs it, in output order; the picture's frame is the uncropped decoded picture.
 type DPB struct {
 	Output func(*DPBPicture)
-	pics   []*DPBPicture
+	// Drop, when set, is called with each picture as the buffer lets go of it (its buffer
+	// is emptied): the decoder recycles the planes of a picture the caller has released.
+	Drop func(*DPBPicture)
+	pics []*DPBPicture
+}
+
+func (d *DPB) drop(p *DPBPicture) {
+	if d.Drop != nil {
+		d.Drop(p)
+	}
+}
+
+// dropAll lets go of every picture of ps.
+func (d *DPB) dropAll(ps []*DPBPicture) {
+	for _, p := range ps {
+		d.drop(p)
+	}
 }
 
 // Pictures returns the pictures held, in the order they entered.
@@ -118,6 +134,7 @@ func (d *DPB) remove(p *DPBPicture) {
 	for i, q := range d.pics {
 		if q == p {
 			d.pics = append(d.pics[:i], d.pics[i+1:]...)
+			d.drop(p)
 			return
 		}
 	}
@@ -130,6 +147,8 @@ func (d *DPB) removeDead() {
 	for _, p := range d.pics {
 		if p.NeededForOutput || p.Mark != UnusedForReference {
 			kept = append(kept, p)
+		} else {
+			d.drop(p)
 		}
 	}
 	for i := len(kept); i < len(d.pics); i++ {
@@ -233,6 +252,7 @@ func (d *DPB) Begin(in PictureInfo) (RefPics, error) {
 			for d.bump() {
 			}
 		}
+		d.dropAll(d.pics)
 		d.pics = d.pics[:0]
 	} else {
 		d.removeDead()
@@ -308,6 +328,7 @@ func (d *DPB) Finish(cur *DPBPicture, picOutput bool) {
 func (d *DPB) Flush() {
 	for d.bump() {
 	}
+	d.dropAll(d.pics)
 	d.pics = d.pics[:0]
 }
 
@@ -334,7 +355,7 @@ func (p *DecodedPicture) Clone() *DecodedPicture {
 // each plane of the result is the window of the plane of p, the same memory with p's stride,
 // so nothing is copied. See Output for what that means for the caller.
 func (p *DecodedPicture) Crop(sps SPS) *DecodedPicture {
-	out := &DecodedPicture{Components: p.Components, BitDepth: p.BitDepth}
+	out := &DecodedPicture{Components: p.Components, BitDepth: p.BitDepth, rec: p.rec}
 	subW, subH := sps.chromaUnits()
 	for c := 0; c < p.Components; c++ {
 		pl := &p.Planes[c]

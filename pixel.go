@@ -22,10 +22,14 @@ type Plane struct {
 func (p *Plane) Is8() bool { return p.Pix8 != nil }
 
 // At returns the sample at column x, row y, of a plane of either kind. It is for tests and
-// tools: a decoder's loops work on the slice.
+// tools: a decoder's loops work on the slice. A plane with no samples (the planes of a
+// picture after Release) reads as 0.
 func (p *Plane) At(x, y int) uint16 {
 	if p.Pix8 != nil {
 		return uint16(p.Pix8[y*p.Stride+x])
+	}
+	if p.Pix16 == nil {
+		return 0
 	}
 	return p.Pix16[y*p.Stride+x]
 }
@@ -94,6 +98,10 @@ type DecodedPicture struct {
 	Components int
 	BitDepth   [3]int
 	Planes     [3]Plane
+
+	// rec is the recycling state of a picture decoded under Options.RecyclePictures (nil
+	// otherwise, and for a Clone).
+	rec *recycle
 }
 
 // Is8 reports whether the picture is made of byte planes: every component has a bit depth of 8.

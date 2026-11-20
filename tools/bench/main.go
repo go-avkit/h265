@@ -36,6 +36,13 @@ func cpuMS() float64 {
 	return float64(ru.Utime.Sec*1000+ru.Stime.Sec*1000) + float64(ru.Utime.Usec+ru.Stime.Usec)/1000
 }
 
+// minflt is the number of minor page faults of this process so far.
+func minflt() int64 {
+	var ru syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
+	return int64(ru.Minflt)
+}
+
 func must(err error) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -47,6 +54,8 @@ func child(args []string) {
 	mode, file := args[0], args[1]
 	data, err := os.ReadFile(file)
 	must(err)
+	recycle := strings.HasSuffix(mode, "r") // h265r, md5r: Options.RecyclePictures, each output released
+	mode = strings.TrimSuffix(mode, "r")
 	switch mode {
 	case "h265", "md5":
 		units, err := h265.SplitAnnexB(data)
@@ -64,15 +73,16 @@ func child(args []string) {
 		}
 		sum := md5.New()
 		frames := 0
-		c0, w0 := cpuMS(), time.Now()
+		c0, w0, f0 := cpuMS(), time.Now(), minflt()
 		for l := 0; l < loops; l++ {
-			d := h265.NewDecoder(h265.Options{})
+			d := h265.NewDecoder(h265.Options{RecyclePictures: recycle})
 			emit := func(outs []h265.Output) {
 				for _, o := range outs {
 					frames++
 					if mode == "md5" {
 						writePicture(sum, o.Picture)
 					}
+					o.Picture.Release() // no-op unless recycle
 				}
 			}
 			for _, u := range units {
@@ -88,7 +98,7 @@ func child(args []string) {
 			fmt.Printf("frames=%d md5=%s\n", frames, hex.EncodeToString(sum.Sum(nil)))
 			return
 		}
-		fmt.Printf("frames=%d cpu_ms=%.1f wall_ms=%.1f\n", frames/loops, (cpuMS()-c0)/float64(loops), float64(time.Since(w0).Milliseconds())/float64(loops))
+		fmt.Printf("frames=%d cpu_ms=%.1f wall_ms=%.1f minflt=%d\n", frames/loops, (cpuMS()-c0)/float64(loops), float64(time.Since(w0).Milliseconds())/float64(loops), (minflt()-f0)/int64(loops))
 	case "decode":
 		r, err := container.NewReader(data)
 		must(err)
