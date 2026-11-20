@@ -322,7 +322,7 @@ func TestDecoderInternalRefusals(t *testing.T) {
 	var sps SPS
 	sps.Log2MaxPOCLSB = 4
 	// the order count of a unit that is no slice
-	if d.begin(Unit{Type: UnitVPS}, h, sps, PPS{}) || len(d.errs) != 1 {
+	if d.begin(Unit{Type: UnitVPS}, h, sps, PPS{}) || len(d.errs) != 1 || !hasErr(d.errs, ErrNotSlice) {
 		t.Errorf("a unit that is no slice: %v", d.errs)
 	}
 	// a reference picture set that 8.3.1 forbids
