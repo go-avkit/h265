@@ -167,6 +167,24 @@ func swapStream(t testing.TB) (sps SPS, small, sets []Unit, swapped Unit) {
 	return sps, small, sets, notFirst(t, slices[0], sps, pps, uint32(picSizeInCtbs(sps)-1))
 }
 
+// A slice that names a picture parameter set the decoder never received is refused, and
+// no picture is begun for it.
+func TestASliceWithNoPictureParameterSetIsRefused(t *testing.T) {
+	d := NewDecoder(Options{})
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("a slice with no picture parameter set was decoded: %v", r)
+		}
+	}()
+	outs, errs := decodeUnits(d, without(seedUnits(t), UnitPPS))
+	if !hasErr(errs, ErrMissingParameterSet) {
+		t.Errorf("no picture parameter set: %v", errs)
+	}
+	if len(outs) != 0 || d.stats.Pictures != 0 {
+		t.Errorf("%d outputs, %d pictures from slices with no picture parameter set", len(outs), d.stats.Pictures)
+	}
+}
+
 // Slice segments of a picture come in increasing order of address: a segment that
 // starts at or before the end of the one before is refused and the picture is lost,
 // instead of each one decoding the same coding tree blocks again.
