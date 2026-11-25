@@ -119,8 +119,10 @@ jobs:
           COVERPKG=$(go list ./... | paste -sd, -)
           # -race plus coverage on a hosted macOS or Windows runner ran past go test's
           # default 10 min (both lanes, run 43865799739, panic at 600 s with
-          # TestTransformTreeCorruptStreams running); 30 min leaves three times that.
-          go test -race -timeout 30m -coverpkg="$COVERPKG" -coverprofile=cover.out ./...
+          # TestTransformTreeCorruptStreams running); 30 min left three times that, and
+          # then ubuntu hit it too (main 595e0ee and PR 96, panic at 1800 s with
+          # TestTransformTreeFailsAtEveryUnit running), so 45 min, inside the job's 60.
+          go test -race -timeout 45m-coverpkg="$COVERPKG" -coverprofile=cover.out ./...
           go tool cover -func=cover.out | tail -n 25
           cov=$(go tool cover -func=cover.out | tail -1 | awk '{print $3}' | tr -d '%')
           echo "coverage: ${cov}%"
