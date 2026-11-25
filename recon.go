@@ -62,7 +62,17 @@ func (r *Reconstructor) Err() error { return r.err }
 // NewReconstructor starts the reconstruction of a picture into frame; the picture
 // parameter set is the one its slices use.
 func NewReconstructor(frame *DecodedPicture, sps SPS, pps PPS) *Reconstructor {
-	return &Reconstructor{Frame: frame, sps: sps, pps: pps, factors: ScalingFactorsOf(sps, pps)}
+	r := &Reconstructor{}
+	r.reset(frame, sps, pps)
+	return r
+}
+
+// reset starts the reconstruction of another picture (or slice segment) with the same
+// working memory: nothing of the last one is kept but the scratch of the inter prediction,
+// which every block fills before it reads.
+func (r *Reconstructor) reset(frame *DecodedPicture, sps SPS, pps PPS) {
+	r.Frame, r.sps, r.pps, r.factors = frame, sps, pps, ScalingFactorsOf(sps, pps)
+	r.Inter, r.err = nil, nil
 }
 
 // Decoder is the coding unit decoder of a slice that reconstructs what it reads.
