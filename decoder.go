@@ -310,15 +310,23 @@ func (d *Decoder) slice(u Unit) {
 		d.fail(fmt.Errorf("%w: %v", ErrSliceHeader, r.err))
 		return
 	}
-	pps, ok := d.ppsM[ppsID]
-	if !ok {
-		d.fail(fmt.Errorf("%w: picture parameter set %d", ErrMissingParameterSet, ppsID))
-		return
-	}
-	sps, ok := d.spsM[pps.SPSID]
-	if !ok {
-		d.fail(fmt.Errorf("%w: sequence parameter set %d", ErrMissingParameterSet, pps.SPSID))
-		return
+	var pps PPS
+	var sps SPS
+	if c := d.cur; !first && c != nil {
+		// 7.4.2.4.2: the parameter sets a picture was begun with stay active until its
+		// last slice segment, whatever arrived since under the same ids; a segment that
+		// names another picture parameter set is refused by the header parse below.
+		pps, sps = c.pps, c.sps
+	} else {
+		var ok bool
+		if pps, ok = d.ppsM[ppsID]; !ok {
+			d.fail(fmt.Errorf("%w: picture parameter set %d", ErrMissingParameterSet, ppsID))
+			return
+		}
+		if sps, ok = d.spsM[pps.SPSID]; !ok {
+			d.fail(fmt.Errorf("%w: sequence parameter set %d", ErrMissingParameterSet, pps.SPSID))
+			return
+		}
 	}
 	h, err := ParseSliceSegmentHeaderFull(u, sps, pps, d.prev)
 	if err != nil {
@@ -341,7 +349,7 @@ func (d *Decoder) slice(u Unit) {
 		return
 	}
 	c := d.cur
-	rec := NewReconstructor(c.frame, sps, pps)
+	rec := NewReconstructor(c.frame, c.sps, c.pps)
 	c.state.Inter = nil
 	err = nil
 	if h.Type != SliceI {

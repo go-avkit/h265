@@ -129,6 +129,18 @@ ffmpeg's speed, an open defect. Through `decode` the 8-bit streams are slower on
 (see the decode README, go-avkit/decode#101). Not measured: arm64 against the
 third-party decoder. No parity is claimed.
 
+**Security fix in v0.24.1:** found by an independent security review of go-images/heif.
+(1) A sequence or picture parameter set that arrived between the slice segments of one
+picture, under the ids the picture was begun with, was read by the segments after it
+while the picture's buffers had the old geometry: `Decode` could panic with an index out
+of range. The decoder now decodes every segment of a picture against the sets the picture
+began with (7.4.2.4.2); the new sets apply from the next picture. (2) A slice segment
+that started at or before the end of the one before it decoded the same coding tree
+blocks again, so a few kilobytes of segments at address 0 cost seconds of CPU and
+gigabytes of allocation; such a segment is now refused with `ErrSliceData` and the
+picture is reported `ErrCorruptPicture` (slice segments come in increasing address
+order, 7.4.7.1). Upgrade if you call the decoder on untrusted input.
+
 **Security fix in v0.16.0:** on a hostile SPS (a picture width or height that is
 not a multiple of the minimum coding block size) v0.14.0 and v0.15.0 could panic
 in intra reconstruction, found by `FuzzDecoder`; `ParseSPS` now refuses such a
