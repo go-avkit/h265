@@ -70,6 +70,9 @@ type PictureState struct {
 	// the last coding unit decoded, which a dependent slice segment continues from.
 	QpY     []int8
 	lastQpY int32
+	// nextTs is the tile scan address after the last coding tree block of the last
+	// slice segment decoded; the next segment must not start before it.
+	nextTs int
 	// motion, when set (Options.RecyclePictures), supplies Motion and takes it back when the
 	// decoded picture buffer lets go of the picture.
 	motion *motionPool
@@ -178,6 +181,12 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 		return err
 	}
 	ts := int(l.RsToTs[hdr.SegmentAddress])
+	// The slice segments of a picture come in increasing order of address, so each
+	// coding tree block is decoded once (7.4.7.1): one that starts at or before the
+	// end of the segment before it would decode the same blocks again.
+	if ts < ps.nextTs {
+		return fmt.Errorf("%w: slice segment at address %d starts before the end of the previous one", ErrSliceData, hdr.SegmentAddress)
+	}
 	n := len(l.TsToRs)
 	sub := 0 // index of the substream being read
 	base := hdr.DataOffset
@@ -235,6 +244,7 @@ func DecodeSliceData(ps *PictureState, u Unit, hdr SliceHeader, pps PPS, cu Codi
 		end := w.D.Terminate() == 1 // end_of_slice_segment_flag
 		ts++
 		if end {
+			ps.nextTs = ts
 			ps.lastQpY = w.lastQpY
 			if pps.DependentSlicesEnabled {
 				ps.ds = w.M

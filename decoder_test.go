@@ -410,6 +410,9 @@ func TestDecoderRefusesAPictureBomb(t *testing.T) {
 //	go test -run='^$' -fuzz='^FuzzDecoder$' -fuzztime=60s
 func FuzzDecoder(f *testing.F) {
 	f.Add(append([]byte{0}, seedBytes(f)...))
+	// parameter sets swapped between the segments of one picture (secfix_test.go)
+	_, small, sets, swapped := swapStream(f)
+	f.Add(append([]byte{0}, annexB(append(append(small, sets...), swapped)...)...))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) == 0 {
 			return
