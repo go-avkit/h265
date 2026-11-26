@@ -169,6 +169,31 @@ func swapStream(t testing.TB) (sps SPS, small, sets []Unit, swapped Unit) {
 
 // A slice that names a picture parameter set the decoder never received is refused, and
 // no picture is begun for it.
+// Full-picture data re-addressed at 1, 2, ... n-1 would decode most of the picture
+// once per segment: each segment must start at or after the end of the one before.
+func TestSegmentsReAddressedInsideThePictureAreRefused(t *testing.T) {
+	sets, slices := flat256Units(t)
+	sps, pps := flat256Params(t, sets)
+	n := int(picSizeInCtbs(sps))
+	if n < 2 {
+		t.Fatalf("the fixture has %d coding tree blocks", n)
+	}
+	for _, addr := range []int{1, n - 1} {
+		d := NewDecoder(Options{})
+		units := append(append([]Unit{}, sets...), slices[0])
+		for a := addr; a < n && a < addr+20; a++ {
+			units = append(units, notFirst(t, slices[0], sps, pps, uint32(a)))
+		}
+		_, errs := decodeUnits(d, units)
+		if !hasErr(errs, ErrCorruptPicture) || !hasErr(errs, ErrSliceData) {
+			t.Errorf("segments re-addressed from %d of %d: %v", addr, n, errs)
+		}
+		if d.stats.Failed != 1 {
+			t.Errorf("address %d: failed pictures %d", addr, d.stats.Failed)
+		}
+	}
+}
+
 func TestASliceWithNoPictureParameterSetIsRefused(t *testing.T) {
 	d := NewDecoder(Options{})
 	defer func() {
