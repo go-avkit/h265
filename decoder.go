@@ -116,6 +116,9 @@ type Decoder struct {
 	// pool is the pool of pictures when Options.RecyclePictures is on, else nil.
 	pool   *picPool
 	motion *motionPool
+	// rec is the reconstructor of every slice segment of every picture: its working
+	// memory (about 60 KB) is allocated once.
+	rec *Reconstructor
 }
 
 type decPicture struct {
@@ -349,7 +352,11 @@ func (d *Decoder) slice(u Unit) {
 		return
 	}
 	c := d.cur
-	rec := NewReconstructor(c.frame, c.sps, c.pps)
+	if d.rec == nil {
+		d.rec = &Reconstructor{}
+	}
+	rec := d.rec
+	rec.reset(c.frame, c.sps, c.pps)
 	c.state.Inter = nil
 	err = nil
 	if h.Type != SliceI {
